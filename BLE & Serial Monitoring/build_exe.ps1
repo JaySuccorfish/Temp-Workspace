@@ -309,10 +309,11 @@ if ($Version) {
         else { throw "Version must be 1.2.3 or 1.2.3.4, got '$Version'" }
     }
     $verFile = Join-Path $BuildDir 'version_info.txt'
+    $verTuple = $Version -replace '\.', ', '
     New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
     @"
 VSVersionInfo(
-  ffi=FixedFileInfo(filevers=($Version), prodvers=($Version)),
+  ffi=FixedFileInfo(filevers=($verTuple), prodvers=($verTuple)),
   kids=[
     StringFileInfo([StringTable('040904B0',
       [StringStruct('FileDescription','Valtrack Debug Monitor'),

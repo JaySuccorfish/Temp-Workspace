@@ -1,0 +1,42 @@
+name: Build Windows EXE & macOS App
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "BLE & Serial Monitoring/**"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Windows EXE
+        shell: pwsh
+        run: |
+          cd "BLE & Serial Monitoring"
+          .\build_exe.ps1 -Version 2.4.0 -NoSmokeTest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ValtrackDebugMonitor-Windows
+          path: "BLE & Serial Monitoring/dist/ValtrackDebugMonitor.exe"
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build macOS .app bundle
+        run: |
+          cd "BLE & Serial Monitoring"
+          chmod +x Start_Monitor_Mac.command build_mac.sh
+          ./build_mac.sh --version 2.4.0
+          cd dist
+          zip -r ValtrackDebugMonitor-macOS.app.zip ValtrackDebugMonitor.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ValtrackDebugMonitor-macOS
+          path: "BLE & Serial Monitoring/dist/ValtrackDebugMonitor-macOS.app.zip"
