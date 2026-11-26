@@ -78,6 +78,10 @@ echo "[mac] Building $APP_NAME.app..."
     --windowed --onedir \
     --paths "$SCRIPT_DIR" \
     --collect-submodules monitor \
+    --collect-submodules serial \
+    --hidden-import serial \
+    --hidden-import serial.tools \
+    --hidden-import serial.tools.list_ports \
     --hidden-import sc2_protocol \
     --hidden-import brand_assets \
     --osx-bundle-identifier "com.succorfish.blemonitor" \
