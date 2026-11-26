@@ -2190,7 +2190,11 @@ class BleGuiApp:
         if event.keysym in nav_keys:
             return None
 
-        ctrl_or_cmd = bool(event.state & (0x0004 | 0x0008 | 0x0010))
+        if sys.platform == "darwin":
+            ctrl_or_cmd = bool(event.state & (0x0004 | 0x0008))
+        else:
+            # On Windows, 0x0008 is NumLock! Only 0x0004 is Control.
+            ctrl_or_cmd = bool(event.state & 0x0004)
         key_low = (event.keysym or "").lower()
         if ctrl_or_cmd and key_low == "a":
             return None
@@ -2423,8 +2427,11 @@ class BleGuiApp:
     # Toolbar helpers: small button factory, save/clear logs, in-terminal search
     # ---------------------------------------------------------------------------------------
     def _btn(self, parent, text, command, colour=None):
+        bg = colour or BRAND["accent_dark"]
+        is_neutral = bg.lower() in (BRAND["surface_alt"].lower(), BRAND["border"].lower(), BRAND["surface"].lower())
+        fg = BRAND["text"] if is_neutral else BRAND["accent_text"]
         return tk.Button(parent, text=text, command=command,
-                         bg=colour or BRAND["accent_dark"], fg=BRAND["accent_text"],
+                         bg=bg, fg=fg,
                          activebackground=BRAND["accent"], activeforeground=BRAND["accent_text"],
                          font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=9, pady=2,
                          cursor="hand2", bd=0)
