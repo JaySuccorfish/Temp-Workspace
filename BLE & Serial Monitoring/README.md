@@ -1,9 +1,12 @@
-# Succorfish BLE Device Monitor (v2.3) + DOTA
+# Succorfish BLE & Serial Monitor (v2.4) + DOTA
 
-A Tkinter desktop tool for engineering diagnosis, live logging, configuration and Over-The-Air (DOTA) firmware updates
-over **BLE** and **Serial (UART/USB)** for every Succorfish / GiGO product family. Each device tab shows what that
-application needs: the GPS map for the trackers, the attitude / drum / jack display for the IMU devices, depth and
-temperature charts for the D&T logger and the air values for the gas logger.
+A cross-platform (**Windows & macOS**) Tkinter desktop tool for engineering diagnosis, live logging, configuration,
+interactive Serial Terminal, and Over-The-Air (DOTA) firmware updates over **BLE** and **Serial (UART/USB)** for every
+Succorfish / GiGO product family.
+
+- **[Release Notes (v2.4.0)](RELEASE_NOTES.md)** — what's new, highlights, and platform notes
+- **[User Guide & Shortcuts](USER_GUIDE.md)** — step-by-step BLE/Serial tutorials and all keyboard shortcuts
+- **[Changelog](CHANGELOG.md)** — full version history
 
 ---
 

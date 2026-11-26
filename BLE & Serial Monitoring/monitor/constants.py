@@ -92,7 +92,7 @@ BRAND = {
     "product":     "BLE Device Monitor",
     "company":     "Succorfish",
     "tagline":     "SUCCORFISH  BLE  DEVICE  MONITOR",
-    "version":     "2.3.0",
+    "version":     "2.4.0",
     "copyright":   "(c) Succorfish",
     "theme":       "dark",
 
