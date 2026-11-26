@@ -221,7 +221,18 @@ class SerialEngine:
                 chunk = self.ser.read(n or 1) if self.ser else b""
             except Exception as exc:
                 if not self._stop.is_set():
-                    post_gui("serial_rx", text=f"[serial error] {exc}", raw=None)
+                    # Device reset or USB unplugged: immediately release the stale OS handle
+                    # so USB CDC-ACM can re-enumerate cleanly without hanging the port.
+                    self._stop.set()
+                    ser_ref = self.ser
+                    self.ser = None
+                    if ser_ref is not None:
+                        try:
+                            ser_ref.close()
+                        except Exception:
+                            pass
+                    post_gui("serial_rx", text=f"\n[serial disconnected] {exc}\n", raw=None)
+                    post_gui("serial_disconnected", reason=str(exc))
                 break
             if not chunk:
                 # flush a partial line that has gone quiet
@@ -240,11 +251,10 @@ class SerialEngine:
                 buf.clear()
 
     def _emit(self, data: bytes):
-        """Send received bytes to the GUI, as hex or as text without ANSI colour codes."""
+        """Send received bytes to the GUI, preserving ANSI colour codes for the Serial Terminal."""
         if self.hex_rx:
             text = data.hex(" ").upper() + "\n"
         else:
             text = data.decode("utf-8", "replace")
-            text = _strip_ansi(text)
             text = text.replace("\r\n", "\n").replace("\r", "")
         post_gui("serial_rx", text=text, raw=data, timestamp=self.timestamp_rx)

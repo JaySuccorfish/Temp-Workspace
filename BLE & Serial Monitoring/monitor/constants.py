@@ -37,6 +37,55 @@ def mono_font(size: int = 9, *styles: str) -> tuple:
 # this dict, not hunting hex literals through 1400 lines. The legacy hex values the original code
 # used are kept as aliases below so nothing that referenced them breaks.
 # ---------------------------------------------------------------------------------------------
+THEME_PALETTES = {
+    "dark": {
+        "bg":          "#0b141a",
+        "surface":     "#121a21",
+        "surface_alt": "#17222b",
+        "border":      "#1f2b35",
+        "accent":      "#00b0b9",
+        "accent_dark": "#00808c",
+        "accent_text": "#ffffff",
+        "text":        "#f1f5f9",
+        "text_dim":    "#cbd5e1",
+        "text_muted":  "#64748b",
+        "ok":          "#10b981",
+        "warn":        "#f59e0b",
+        "err":         "#ef4444",
+        "info":        "#38bdf8",
+        "log_bg":      "#0b141a",
+        "log_fg":      "#f8fafc",
+        "log_device":  "#f1f5f9",
+        "log_sys":     "#7dd3fc",
+        "log_warn":    "#fcd34d",
+        "log_err":     "#f87171",
+        "log_gps":     "#4ade80",
+    },
+    "light": {
+        "bg":          "#f1f5f9",
+        "surface":     "#ffffff",
+        "surface_alt": "#e2e8f0",
+        "border":      "#cbd5e1",
+        "accent":      "#008b94",
+        "accent_dark": "#006d77",
+        "accent_text": "#ffffff",
+        "text":        "#0f172a",
+        "text_dim":    "#334155",
+        "text_muted":  "#64748b",
+        "ok":          "#059669",
+        "warn":        "#d97706",
+        "err":         "#dc2626",
+        "info":        "#0284c7",
+        "log_bg":      "#ffffff",
+        "log_fg":      "#0f172a",
+        "log_device":  "#1e293b",
+        "log_sys":     "#0369a1",
+        "log_warn":    "#b45309",
+        "log_err":     "#b91c1c",
+        "log_gps":     "#15803d",
+    },
+}
+
 BRAND = {
     # Product identity
     "name":        "SUCCORFISH",
@@ -45,28 +94,10 @@ BRAND = {
     "tagline":     "SUCCORFISH  BLE  DEVICE  MONITOR",
     "version":     "2.3.0",
     "copyright":   "(c) Succorfish",
+    "theme":       "dark",
 
-    # Surfaces (darkest -> lightest)
-    "bg":          "#0b141a",   # window / app background
-    "surface":     "#121a21",   # panels, tab body
-    "surface_alt": "#17222b",   # inputs, list rows
-    "border":      "#1f2b35",
-
-    # Brand accent
-    "accent":      "#00b0b9",   # Succorfish teal
-    "accent_dark": "#00808c",
-    "accent_text": "#ffffff",
-
-    # Text
-    "text":        "#e6eef2",
-    "text_dim":    "#94b2be",
-    "text_muted":  "#5f7480",
-
-    # Semantic
-    "ok":          "#10b981",
-    "warn":        "#f59e0b",
-    "err":         "#ef4444",
-    "info":        "#38bdf8",
+    # Active palette (defaults to dark; mutated in-place by set_theme_mode)
+    **THEME_PALETTES["dark"],
 
     # Type
     "font_ui":     (FONT_UI_FAMILY, 9),
@@ -75,6 +106,24 @@ BRAND = {
     "font_mono":   (FONT_MONO_FAMILY, 9),
     "font_mono_b": (FONT_MONO_FAMILY, 9, "bold"),
 }
+
+
+def get_theme_mode() -> str:
+    """Return active theme name: 'dark' or 'light'."""
+    return BRAND.get("theme", "dark")
+
+
+def set_theme_mode(mode: str) -> dict:
+    """Switch BRAND palette in-place to 'dark' or 'light' and return the previous palette dict."""
+    target = "light" if str(mode).lower().strip() == "light" else "dark"
+    old_palette = {k: BRAND[k] for k in THEME_PALETTES["dark"]}
+    BRAND.update(THEME_PALETTES[target])
+    BRAND["theme"] = target
+    global C_BG, C_SURFACE, C_TEXT
+    C_BG = BRAND["bg"]
+    C_SURFACE = BRAND["surface"]
+    C_TEXT = BRAND["text"]
+    return old_palette
 
 # Legacy aliases -- keeps the original call sites working if they are ever restored verbatim.
 C_BG = BRAND["bg"]

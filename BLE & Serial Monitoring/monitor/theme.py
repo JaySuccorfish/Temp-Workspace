@@ -3,7 +3,7 @@
 @version 1.0
 @date 2026-11-07
 """
-from .constants import BRAND, FONT_MONO_FAMILY, FONT_UI_FAMILY
+from .constants import BRAND, FONT_MONO_FAMILY, FONT_UI_FAMILY, THEME_PALETTES, get_theme_mode
 from .logbus import log_system
 from brand_assets import BRAND_ICON_B64
 from brand_assets import BRAND_LOGO_B64
@@ -249,7 +249,7 @@ def apply_brand_theme(root):
     for name in ("TFrame", "TLabelframe"):
         style.configure(name, background=b["surface"], borderwidth=0)
     style.configure("TLabelframe.Label", background=b["surface"], foreground=b["accent"])
-    style.configure("BrandHdr.TFrame", background=b["bg"])
+    style.configure("BrandHdr.TFrame", background=THEME_PALETTES["dark"]["bg"])
     style.configure("TLabel", background=b["surface"], foreground=b["text"], font=b["font_ui"])
     style.configure("TSeparator", background=b["border"])
 
@@ -310,68 +310,145 @@ def apply_brand_theme(root):
                     lightcolor=b["accent"], darkcolor=b["accent_dark"])
 
 
-class BrandHeader(ttk.Frame):
-    """The brand bar shown at the top of every window: logo, product name, version, PC UTC clock, link state."""
+def retheme_widget_tree(root, old_palette: dict, new_palette: dict) -> None:
+    """Walk root (and any open Toplevels) and remap classic Tk widget colours from old_palette -> new_palette.
 
-    def __init__(self, parent, subtitle=None, show_clock=True):
-        """Build the bar: half-size logo (kept on self so Tk does not drop it), title, optional subtitle,
-        live PC UTC clock and the link-state label on the right.
-        """
+    BrandHeader stays dark so the white Succorfish logo lockup remains crisp in both Light and Dark themes.
+    """
+    cmap: dict[str, str] = {}
+    for key, old_val in old_palette.items():
+        if key.startswith("log_"):
+            continue
+        new_val = new_palette.get(key)
+        if isinstance(old_val, str) and isinstance(new_val, str) and old_val.lower() != new_val.lower():
+            cmap[old_val.lower()] = new_val
+    if not cmap:
+        return
+
+    color_opts = (
+        "bg", "background", "fg", "foreground",
+        "activebackground", "activeforeground",
+        "selectcolor", "selectbackground", "selectforeground",
+        "insertbackground", "highlightbackground", "highlightcolor",
+        "readonlybackground", "troughcolor",
+    )
+
+    def _walk(widget):
+        if isinstance(widget, BrandHeader):
+            return
+        updates = {}
+        for opt in color_opts:
+            try:
+                cur = str(widget.cget(opt)).lower()
+            except Exception:
+                continue
+            if cur in cmap:
+                updates[opt] = cmap[cur]
+        if updates:
+            try:
+                widget.configure(**updates)
+            except Exception:
+                pass
+        for child in widget.winfo_children():
+            _walk(child)
+
+    _walk(root)
+
+
+class BrandHeader(ttk.Frame):
+    """The brand bar shown at the top of windows.
+
+    ``compact=True`` renders a slim VS Code-style title strip (no large logo) for the main window.
+    """
+
+    def __init__(self, parent, subtitle=None, show_clock=True, on_toggle_theme=None, compact=False):
         super().__init__(parent, style="BrandHdr.TFrame")
-        logo, _ = brand_images()
+        logo, _ = (None, None) if compact else brand_images()
+        hdr = THEME_PALETTES["dark"]
 
         self.columnconfigure(1, weight=1)
 
-        if logo is not None:
-            # The embedded lockup is 640x120. Halving it keeps the bar compact (~60 px) and still
-            # crisp on a HiDPI panel. The subsampled PhotoImage must be kept alive on self --
-            # Tk drops the bitmap as soon as the last Python reference goes away.
-            self._logo_img = logo.subsample(2)
-            tk.Label(self, image=self._logo_img, bg=BRAND["bg"], bd=0).grid(
-                row=0, column=0, rowspan=2, sticky="w", padx=(8, 10), pady=3)
-        else:
-            tk.Label(self, text=BRAND["name"], bg=BRAND["bg"], fg=BRAND["accent"],
-                     font=(FONT_UI_FAMILY, 13, "bold")).grid(
-                row=0, column=0, rowspan=2, sticky="w", padx=(8, 10), pady=3)
-
-        # Subtitle: if the logo lockup already contains the product name ("VALTRACK BLE DEBUG MONITOR"),
-        # do not duplicate it side-by-side. Only show subtitle if it differs (e.g. subpanel name).
-        if subtitle and (logo is None or subtitle != BRAND["product"]):
-            tk.Label(self, text=subtitle, bg=BRAND["bg"], fg=BRAND["text"],
-                     font=(FONT_UI_FAMILY, 9, "bold")).grid(row=0, column=1, sticky="sw",
-                                                        padx=(0, 8), pady=(4, 0))
-            self._ver = tk.Label(self, text=f"v{BRAND['version']}  |  {BRAND['copyright']}",
-                                 bg=BRAND["bg"], fg=BRAND["text_muted"],
-                                 font=(FONT_UI_FAMILY, 7))
-            self._ver.grid(row=1, column=1, sticky="nw", padx=(0, 8))
+        if compact:
+            title_txt = f"{BRAND['company']}  ·  {subtitle or BRAND['product']}  v{BRAND['version']}"
+            tk.Label(self, text=title_txt, bg=hdr["bg"], fg=hdr["accent"],
+                     font=(FONT_UI_FAMILY, 9, "bold")).grid(
+                row=0, column=0, sticky="w", padx=(10, 8), pady=3)
+            self._ver = None
         elif logo is not None:
+            self._logo_img = logo.subsample(2)
+            tk.Label(self, image=self._logo_img, bg=hdr["bg"], bd=0).grid(
+                row=0, column=0, rowspan=2, sticky="w", padx=(8, 10), pady=3)
+            if subtitle and subtitle != BRAND["product"]:
+                tk.Label(self, text=subtitle, bg=hdr["bg"], fg=hdr["text"],
+                         font=(FONT_UI_FAMILY, 9, "bold")).grid(row=0, column=1, sticky="sw",
+                                                            padx=(0, 8), pady=(4, 0))
             self._ver = tk.Label(self, text=f"v{BRAND['version']}  |  {BRAND['copyright']}",
-                                 bg=BRAND["bg"], fg=BRAND["text_muted"],
+                                 bg=hdr["bg"], fg=hdr["text_muted"],
                                  font=(FONT_UI_FAMILY, 7))
             self._ver.grid(row=1, column=1, sticky="nw", padx=(0, 10))
         else:
-            self._ver = None
+            tk.Label(self, text=BRAND["name"], bg=hdr["bg"], fg=hdr["accent"],
+                     font=(FONT_UI_FAMILY, 13, "bold")).grid(
+                row=0, column=0, rowspan=2, sticky="w", padx=(8, 10), pady=3)
+            if subtitle:
+                tk.Label(self, text=subtitle, bg=hdr["bg"], fg=hdr["text"],
+                         font=(FONT_UI_FAMILY, 9, "bold")).grid(row=0, column=1, sticky="sw",
+                                                            padx=(0, 8), pady=(4, 0))
+                self._ver = tk.Label(self, text=f"v{BRAND['version']}  |  {BRAND['copyright']}",
+                                     bg=hdr["bg"], fg=hdr["text_muted"],
+                                     font=(FONT_UI_FAMILY, 7))
+                self._ver.grid(row=1, column=1, sticky="nw", padx=(0, 8))
+            else:
+                self._ver = None
+
+        rowspan = 1 if compact else 2
 
         # Live PC UTC clock
         self.show_clock = show_clock
         if self.show_clock:
-            self.utc_frame = tk.Frame(self, bg=BRAND["surface_alt"], padx=8, pady=3,
-                                      highlightthickness=1, highlightbackground=BRAND["border"])
-            self.utc_lbl = tk.Label(self.utc_frame, text="", bg=BRAND["surface_alt"],
-                                    fg=BRAND["accent"], font=(FONT_MONO_FAMILY, 9, "bold"))
+            self.utc_frame = tk.Frame(self, bg=hdr["surface_alt"], padx=6, pady=1 if compact else 3,
+                                      highlightthickness=1, highlightbackground=hdr["border"])
+            self.utc_lbl = tk.Label(self.utc_frame, text="", bg=hdr["surface_alt"],
+                                    fg=hdr["accent"], font=(FONT_MONO_FAMILY, 8 if compact else 9, "bold"))
             self.utc_lbl.pack(side=tk.LEFT)
-            self.utc_frame.grid(row=0, column=2, rowspan=2, sticky="e", padx=(10, 15))
+            self.utc_frame.grid(row=0, column=2, rowspan=rowspan, sticky="e", padx=(8, 8), pady=2 if compact else 0)
             self._update_clock()
         else:
             self.utc_lbl = None
 
-        self.status_lbl = tk.Label(self, text="[DISCONNECTED]", bg=BRAND["bg"],
-                                   fg=BRAND["text_muted"], font=(FONT_MONO_FAMILY, 8, "bold"))
-        self.status_lbl.grid(row=0, column=3, rowspan=2, sticky="e", padx=(0, 12))
+        # Optional Light / Dark theme toggle button
+        if on_toggle_theme is not None:
+            self.btn_theme = tk.Button(
+                self,
+                text="☀ Light" if get_theme_mode() == "dark" else "🌙 Dark",
+                command=on_toggle_theme,
+                bg=hdr["surface_alt"],
+                fg=hdr["text"],
+                activebackground=hdr["accent_dark"],
+                activeforeground="#ffffff",
+                font=(FONT_UI_FAMILY, 8, "bold"),
+                relief=tk.FLAT,
+                padx=7,
+                pady=1 if compact else 2,
+                cursor="hand2",
+                bd=0,
+            )
+            self.btn_theme.grid(row=0, column=3, rowspan=rowspan, sticky="e", padx=(0, 8))
+        else:
+            self.btn_theme = None
+
+        self.status_lbl = tk.Label(self, text="[DISCONNECTED]", bg=hdr["bg"],
+                                   fg=hdr["text_muted"], font=(FONT_MONO_FAMILY, 8, "bold"))
+        self.status_lbl.grid(row=0, column=4, rowspan=rowspan, sticky="e", padx=(0, 10))
 
         # thin accent rule under the bar
-        tk.Frame(self, bg=BRAND["accent"], height=2).grid(row=2, column=0, columnspan=4,
-                                                          sticky="ew")
+        rule_row = 1 if compact else 2
+        tk.Frame(self, bg=hdr["accent"], height=1 if compact else 2).grid(
+            row=rule_row, column=0, columnspan=5, sticky="ew")
+
+    def refresh_theme_button(self):
+        if self.btn_theme is not None:
+            self.btn_theme.config(text="☀ Light" if get_theme_mode() == "dark" else "🌙 Dark")
 
     def _update_clock(self):
         """Update the live PC UTC clock every 500 ms."""

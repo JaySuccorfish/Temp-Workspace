@@ -21,8 +21,12 @@ from .config_codecs import format_seconds
 from .config_codecs import parse_config_print
 from .config_codecs import parse_next_report
 from .config_panel import ConfigPanel
+from . import user_settings
 from .constants import ADV_NAME_PRESETS
 from .constants import BRAND
+from .constants import FONT_MONO_FAMILY
+from .constants import get_theme_mode
+from .constants import set_theme_mode
 from .device_profiles import DEVICE_TYPES
 from .device_profiles import device_type_profile
 from .device_profiles import normalise_profile
@@ -53,6 +57,7 @@ from .serial_engine import SerialEngine
 from .theme import BrandHeader
 from .theme import apply_brand_theme
 from .theme import apply_window_icon
+from .theme import retheme_widget_tree
 import asyncio
 import sys
 import time
@@ -89,6 +94,7 @@ class BleGuiApp:
         start polling the message queue and run a first scan.
         """
         self.root = root
+        set_theme_mode(user_settings.get("theme", "dark"))
         self.root.title(f"{BRAND['company']} {BRAND['product']}  v{BRAND['version']}")
         # Auto-adjust window dimensions to screen resolution
         screen_w = self.root.winfo_screenwidth()
@@ -113,14 +119,25 @@ class BleGuiApp:
         self.device_log_frames: dict[str, tk.Frame] = {}
         self.device_telemetry: dict[str, dict] = {}
         self._config_windows: dict[str, tk.Toplevel] = {}
+        self._log_font_size = 10
+        self._search_matches: list[tuple[str, str]] = []
+        self._search_idx = -1
+        self._drag_tab_id: "str | None" = None
+        self._serial_ansi_fg: "int | None" = None
+        self._serial_ansi_bold = False
+        self._search_matches: list[tuple[str, str]] = []
+        self._search_idx = -1
+        self._serial_ansi_fg: "int | None" = None
+        self._serial_ansi_bold = False
         self.log_tab_sessions = {}
         self.session_status = {}
         self.var_auto_reconnect = tk.BooleanVar(value=True)
         self.var_auto_debug_log = tk.BooleanVar(value=True)
         engine.auto_reconnect = self.var_auto_reconnect.get()
 
-        # Brand bar sits above everything else and owns the connection indicator.
-        self.header = BrandHeader(self.root, subtitle=BRAND["product"])
+        # Compact VS Code-style top bar (no large logo) with UTC clock, Light/Dark toggle & link state.
+        self.header = BrandHeader(self.root, subtitle=BRAND["product"],
+                                  on_toggle_theme=self.toggle_theme, compact=True)
         self.header.pack(fill=tk.X, side=tk.TOP)
 
         self._build_ui()
@@ -132,136 +149,137 @@ class BleGuiApp:
         """Build the window: status/log toolbar, scan + device + connect bar, profile and option controls,
         GPS status line, and the log notebook (system tab, serial tab, one tab per device).
         """
-        # ---- compact toolbar: status pill + log actions -----------------------------------
-        top_bar = tk.Frame(self.root, bg=BRAND["bg"], padx=10, pady=4)
+        # ---- compact VS Code-style toolbar: status + log controls + search ----------------
+        top_bar = tk.Frame(self.root, bg=BRAND["bg"], padx=8, pady=2)
         top_bar.pack(fill=tk.X)
 
         self.lbl_status = tk.Label(top_bar, text="Ready", font=("Segoe UI", 8, "bold"),
-                                   fg=BRAND["text"], bg=BRAND["border"], padx=8, pady=2)
+                                   fg=BRAND["text"], bg=BRAND["border"], padx=7, pady=1)
         self.lbl_status.pack(side=tk.LEFT)
 
-        self.lbl_details = tk.Label(top_bar, text="Target: Succorfish Gigo",
-                                    font=("Consolas", 8), fg=BRAND["text_dim"], bg=BRAND["bg"])
-        self.lbl_details.pack(side=tk.RIGHT, padx=(10, 0))
+        self.btn_toggle_stream = tk.Button(
+            top_bar, text="Pause", command=self.toggle_stream, state=tk.DISABLED,
+            bg=BRAND["warn"], fg="#ffffff", font=("Segoe UI", 8, "bold"),
+            relief=tk.FLAT, padx=7, pady=1)
+        self.btn_toggle_stream.pack(side=tk.LEFT, padx=(6, 3))
 
-        # Search: live filter over the terminal pane. Enter = next match, Esc = clear.
+        self.var_autoscroll = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            top_bar, text="Auto-Scroll", variable=self.var_autoscroll,
+            bg=BRAND["bg"], fg=BRAND["text"], selectcolor=BRAND["accent_dark"],
+            activebackground=BRAND["bg"], font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(4, 6))
+
+        self.lbl_lines = tk.Label(top_bar, text="Lines: 0", font=(FONT_MONO_FAMILY, 8),
+                                  fg=BRAND["text_dim"], bg=BRAND["bg"])
+        self.lbl_lines.pack(side=tk.LEFT, padx=(2, 8))
+
+        self.lbl_details = tk.Label(top_bar, text="",
+                                    font=(FONT_MONO_FAMILY, 8), fg=BRAND["text_dim"], bg=BRAND["bg"])
+        self.lbl_details.pack(side=tk.LEFT, padx=(4, 8))
+
+        # Right side: Save, Clear, VS Code-style Find (entry + match count + ▲ ▼ ×)
+        self._btn(top_bar, "Save", self._save_logs, BRAND["accent_dark"]).pack(side=tk.RIGHT, padx=(4, 0))
+        self._btn(top_bar, "Clear", self._clear_logs, BRAND["border"]).pack(side=tk.RIGHT, padx=(4, 0))
+
+        self._btn(top_bar, "×", self._search_clear, BRAND["surface_alt"]).pack(side=tk.RIGHT, padx=(1, 4))
+        self._btn(top_bar, "▼", self._search_next, BRAND["surface_alt"]).pack(side=tk.RIGHT, padx=1)
+        self._btn(top_bar, "▲", self._search_prev, BRAND["surface_alt"]).pack(side=tk.RIGHT, padx=(2, 1))
+
+        self.lbl_search_count = tk.Label(top_bar, text="", font=(FONT_MONO_FAMILY, 8),
+                                         fg=BRAND["text_dim"], bg=BRAND["bg"], width=9, anchor="e")
+        self.lbl_search_count.pack(side=tk.RIGHT, padx=(2, 2))
+
         self.search_var = tk.StringVar()
         self._search_entry = tk.Entry(
-            top_bar, textvariable=self.search_var, width=22, bg=BRAND["surface_alt"],
-            fg=BRAND["text"], insertbackground=BRAND["text"], font=("Consolas", 8),
+            top_bar, textvariable=self.search_var, width=18, bg=BRAND["surface_alt"],
+            fg=BRAND["text"], insertbackground=BRAND["text"], font=(FONT_MONO_FAMILY, 8),
             relief=tk.FLAT, highlightthickness=1, highlightbackground=BRAND["border"],
             highlightcolor=BRAND["accent"])
-        self._search_entry.pack(side=tk.RIGHT, padx=(6, 0))
+        self._search_entry.pack(side=tk.RIGHT, padx=(4, 2))
         self._search_entry.bind("<Return>", lambda e: self._search_next())
+        self._search_entry.bind("<Shift-Return>", lambda e: self._search_prev())
         self._search_entry.bind("<Escape>", lambda e: self._search_clear())
         self.search_var.trace_add("write", lambda *_: self._search_apply())
 
-        tk.Label(top_bar, text="Search", font=("Segoe UI", 8, "bold"),
-                 fg=BRAND["text_dim"], bg=BRAND["bg"]).pack(side=tk.RIGHT, padx=(8, 4))
+        tk.Label(top_bar, text="Find", font=("Segoe UI", 8, "bold"),
+                 fg=BRAND["text_dim"], bg=BRAND["bg"]).pack(side=tk.RIGHT, padx=(6, 2))
 
-        self._btn(top_bar, "Save logs", self._save_logs, BRAND["accent_dark"]).pack(
-            side=tk.RIGHT, padx=(8, 0))
-        self._btn(top_bar, "Clear", self._clear_logs, BRAND["border"]).pack(
-            side=tk.RIGHT, padx=(6, 0))
+        # Global Ctrl+F / Cmd+F focuses the Find box (just like VS Code)
+        for seq in ("<Control-f>", "<Control-F>", "<Command-f>", "<Command-F>"):
+            self.root.bind(seq, self._focus_search)
 
-        ctrl_panel = tk.Frame(self.root, bg=BRAND["surface"], padx=10, pady=6)
-        ctrl_panel.pack(fill=tk.X, padx=10, pady=(2, 4))
+        # ---- compact single-row BLE control bar -------------------------------------------
+        ctrl_panel = tk.Frame(self.root, bg=BRAND["surface"], padx=6, pady=3)
+        ctrl_panel.pack(fill=tk.X, padx=8, pady=(1, 2))
 
         self._build_serial_panel()
 
-        tk.Label(ctrl_panel, text="Filter:", font=("Segoe UI", 9, "bold"), fg=BRAND["text"], bg=BRAND["surface"]).grid(row=0, column=0, sticky=tk.W, padx=4)
+        tk.Label(ctrl_panel, text="Filter:", font=("Segoe UI", 8, "bold"), fg=BRAND["text_dim"], bg=BRAND["surface"]).pack(side=tk.LEFT, padx=(2, 2))
         self.preset_var = tk.StringVar(value=ADV_NAME_PRESETS[0][0])
-        self.preset_combo = ttk.Combobox(ctrl_panel, textvariable=self.preset_var, values=[p[0] for p in ADV_NAME_PRESETS], state="readonly", width=18)
-        self.preset_combo.grid(row=0, column=1, padx=4, sticky=tk.W)
+        self.preset_combo = ttk.Combobox(ctrl_panel, textvariable=self.preset_var, values=[p[0] for p in ADV_NAME_PRESETS], state="readonly", width=16, font=("Segoe UI", 8))
+        self.preset_combo.pack(side=tk.LEFT, padx=2)
 
-        self.btn_scan = tk.Button(ctrl_panel, text="Scan Devices", command=self.do_scan, bg=BRAND["accent_dark"], fg=BRAND["text"], font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=10, pady=3)
-        self.btn_scan.grid(row=0, column=2, padx=6)
-
-        tk.Label(ctrl_panel, text="Device:", font=("Segoe UI", 9, "bold"), fg=BRAND["text"], bg=BRAND["surface"]).grid(row=0, column=3, sticky=tk.W, padx=(10, 4))
-        self.device_combo = ttk.Combobox(ctrl_panel, values=[], state="disabled", width=48, font=("Consolas", 9))
-        self.device_combo.grid(row=0, column=4, padx=4, sticky=tk.W)
-        self.device_combo.bind("<<ComboboxSelected>>", self._on_device_combo_change)
-
-        self.btn_connect = tk.Button(ctrl_panel, text="Connect", command=self.do_connect, state=tk.DISABLED, bg=BRAND["ok"], fg=BRAND["text"], font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=12, pady=3)
-        self.btn_connect.grid(row=0, column=5, padx=4)
-
-        self.btn_disconnect = tk.Button(ctrl_panel, text="Disconnect", command=self.do_disconnect, state=tk.DISABLED, bg=BRAND["err"], fg=BRAND["text"], font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=10, pady=3)
-        self.btn_disconnect.grid(row=0, column=6, padx=4)
-
-        self.btn_config = tk.Button(ctrl_panel, text="Device Config", command=self.open_config_panel, state=tk.DISABLED, bg=BRAND["accent_dark"], fg=BRAND["text"], font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=10, pady=3)
-        self.btn_config.grid(row=0, column=8, padx=4)
-
-        self.btn_sensors = tk.Button(ctrl_panel, text="Logger", command=self.open_sensor_panel,
-                                     state=tk.DISABLED, bg=BRAND["accent"], fg=BRAND["text"],
-                                     font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=10, pady=3)
-        self.btn_sensors.grid(row=0, column=9, padx=4)
-
-        # ---- manual debug-log control --------------------------------------------------
-        self.debug_log_on = False
-        self.btn_debuglog = tk.Button(
-            ctrl_panel, text="Debug Log: OFF", command=self.toggle_debug_log,
-            state=tk.DISABLED, bg=BRAND["surface_alt"], fg=BRAND["text"],
-            font=("Segoe UI", 9, "bold"), relief=tk.FLAT, padx=10, pady=3)
-        self.btn_debuglog.grid(row=0, column=10, padx=4)
-
-        self.chk_auto_reconnect = tk.Checkbutton(
-            ctrl_panel, text="Auto Reconnect", variable=self.var_auto_reconnect,
-            command=self._on_toggle_auto_reconnect, bg=BRAND["surface"],
-            fg=BRAND["text"], selectcolor=BRAND["accent_dark"],
-            activebackground=BRAND["surface"], font=("Segoe UI", 8))
-        self.chk_auto_reconnect.grid(row=0, column=11, padx=4, sticky=tk.W)
-
-        # Device type: 'Auto-detect' decides from the advertisement and the GATT table. A choice is only needed where
-        # the device cannot tell (Valtrack V1 vs 2, an SC2 without scan data); it is checked against the GATT table.
-        tk.Label(ctrl_panel, text="Device type:", font=("Segoe UI", 9, "bold"), fg=BRAND["text"],
-                 bg=BRAND["surface"]).grid(row=1, column=0, sticky=tk.W, padx=4, pady=(6, 0))
+        tk.Label(ctrl_panel, text="Type:", font=("Segoe UI", 8, "bold"), fg=BRAND["text_dim"], bg=BRAND["surface"]).pack(side=tk.LEFT, padx=(5, 2))
         self.device_type_var = tk.StringVar(value=DEVICE_TYPES[0][1])
         self.device_type_combo = ttk.Combobox(ctrl_panel, textvariable=self.device_type_var,
                                               values=[label for _key, label, _profile in DEVICE_TYPES],
-                                              state="readonly", width=30)
-        self.device_type_combo.grid(row=1, column=1, columnspan=3, padx=4, pady=(6, 0), sticky=tk.W)
-        tk.Label(ctrl_panel, text="Valtrack V1 / 2, GiGO Delphis (MGT) and GiGO Rotation / Jack all advertise "
-                                  "'Succorfish Gigo' and are told apart after connecting  -  SC2 Gen2 / Gen3  -  "
-                                  "GiGO Depth & Temp  -  GiGO Gas", font=("Segoe UI", 8), fg=BRAND["text_dim"],
-                 bg=BRAND["surface"]).grid(row=1, column=4, columnspan=8, padx=4, pady=(6, 0), sticky=tk.W)
+                                              state="readonly", width=14, font=("Segoe UI", 8))
+        self.device_type_combo.pack(side=tk.LEFT, padx=2)
 
-        # GPS Dashboard
+        self.btn_scan = tk.Button(ctrl_panel, text="Scan", command=self.do_scan, bg=BRAND["accent_dark"], fg=BRAND["accent_text"], font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=2)
+        self.btn_scan.pack(side=tk.LEFT, padx=(4, 4))
+
+        self.device_combo = ttk.Combobox(ctrl_panel, values=[], state="disabled", width=34, font=(FONT_MONO_FAMILY, 8))
+        self.device_combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+        self.device_combo.bind("<<ComboboxSelected>>", self._on_device_combo_change)
+
+        self.btn_connect = tk.Button(ctrl_panel, text="Connect", command=self.do_connect, state=tk.DISABLED, bg=BRAND["ok"], fg="#ffffff", font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=2)
+        self.btn_connect.pack(side=tk.LEFT, padx=2)
+
+        self.btn_disconnect = tk.Button(ctrl_panel, text="Disconnect", command=self.do_disconnect, state=tk.DISABLED, bg=BRAND["err"], fg="#ffffff", font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=2)
+        self.btn_disconnect.pack(side=tk.LEFT, padx=2)
+
+        self.btn_config = tk.Button(ctrl_panel, text="Config", command=self.open_config_panel, state=tk.DISABLED, bg=BRAND["accent_dark"], fg=BRAND["accent_text"], font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=2)
+        self.btn_config.pack(side=tk.LEFT, padx=2)
+
+        self.btn_sensors = tk.Button(ctrl_panel, text="Logger", command=self.open_sensor_panel,
+                                     state=tk.DISABLED, bg=BRAND["accent"], fg=BRAND["accent_text"],
+                                     font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=7, pady=2)
+        self.btn_sensors.pack(side=tk.LEFT, padx=2)
+
+        self.debug_log_on = False
+        self.btn_debuglog = tk.Button(
+            ctrl_panel, text="Dbg: OFF", command=self.toggle_debug_log,
+            state=tk.DISABLED, bg=BRAND["surface_alt"], fg=BRAND["text"],
+            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=7, pady=2)
+        self.btn_debuglog.pack(side=tk.LEFT, padx=2)
+
+        self.chk_auto_reconnect = tk.Checkbutton(
+            ctrl_panel, text="Auto-Recon", variable=self.var_auto_reconnect,
+            command=self._on_toggle_auto_reconnect, bg=BRAND["surface"],
+            fg=BRAND["text"], selectcolor=BRAND["accent_dark"],
+            activebackground=BRAND["surface"], font=("Segoe UI", 8))
+        self.chk_auto_reconnect.pack(side=tk.LEFT, padx=(3, 0))
+
+        # GPS Dashboard (hidden legacy labels kept for compatibility)
         gps_card = tk.Frame(self.root, bg=BRAND["bg"], padx=10, pady=6)
-        # GPS telemetry now lives in each device tab (vertical panel); this card stays unpacked
-        # so the legacy global labels below remain valid but invisible.
+        self.lbl_gps_status = tk.Label(gps_card, text="GPS: Waiting for stream", font=(FONT_MONO_FAMILY, 9, "bold"), fg=BRAND["warn"], bg=BRAND["surface_alt"], padx=8, pady=2)
+        self.lbl_gps_time = tk.Label(gps_card, text="UTC Time: --:--:--", font=(FONT_MONO_FAMILY, 9), fg=BRAND["text"], bg=BRAND["bg"])
+        self.lbl_gps_coords = tk.Label(gps_card, text="Coords: --", font=(FONT_MONO_FAMILY, 9), fg=BRAND["text"], bg=BRAND["bg"])
+        self.lbl_gps_count = tk.Label(gps_card, text="GPS Sentences: 0", font=(FONT_MONO_FAMILY, 9, "bold"), fg=BRAND["ok"], bg=BRAND["bg"])
 
-        tk.Label(gps_card, text="GPS LIVE TELEMETRY", font=("Segoe UI", 9, "bold"), fg=BRAND["info"], bg=BRAND["bg"]).pack(side=tk.LEFT, padx=(4, 12))
-        self.lbl_gps_status = tk.Label(gps_card, text="GPS: Waiting for stream", font=("Consolas", 9, "bold"), fg=BRAND["warn"], bg=BRAND["surface_alt"], padx=8, pady=2)
-        self.lbl_gps_status.pack(side=tk.LEFT, padx=4)
-        self.lbl_gps_time = tk.Label(gps_card, text="UTC Time: --:--:--", font=("Consolas", 9), fg=BRAND["text"], bg=BRAND["bg"])
-        self.lbl_gps_time.pack(side=tk.LEFT, padx=12)
-        self.lbl_gps_coords = tk.Label(gps_card, text="Coords: --", font=("Consolas", 9), fg=BRAND["text"], bg=BRAND["bg"])
-        self.lbl_gps_coords.pack(side=tk.LEFT, padx=12)
-        self.lbl_gps_count = tk.Label(gps_card, text="GPS Sentences: 0", font=("Consolas", 9, "bold"), fg=BRAND["ok"], bg=BRAND["bg"])
-        self.lbl_gps_count.pack(side=tk.RIGHT, padx=8)
-
-        # Log Console Window
+        # Log Console Window (maximised vertical area)
         log_frame = tk.Frame(self.root, bg=BRAND["bg"])
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 8))
-
-        tool_bar = tk.Frame(log_frame, bg=BRAND["surface"], padx=8, pady=4)
-        tool_bar.pack(fill=tk.X)
-
-        self.btn_toggle_stream = tk.Button(tool_bar, text="Pause Stream", command=self.toggle_stream, state=tk.DISABLED, bg=BRAND["warn"], fg=BRAND["text"], font=("Segoe UI", 8, "bold"), relief=tk.FLAT)
-        self.btn_toggle_stream.pack(side=tk.LEFT, padx=4)
-        tk.Button(tool_bar, text="Clear", command=self.clear_logs, bg=BRAND["surface_alt"], fg=BRAND["text"], font=("Segoe UI", 8), relief=tk.FLAT).pack(side=tk.LEFT, padx=4)
-
-        self.var_autoscroll = tk.BooleanVar(value=True)
-        tk.Checkbutton(tool_bar, text="Auto-Scroll", variable=self.var_autoscroll, bg=BRAND["surface"], fg=BRAND["text"], selectcolor=BRAND["accent_dark"]).pack(side=tk.LEFT, padx=8)
-
-        self.lbl_lines = tk.Label(tool_bar, text="Lines: 0", font=("Consolas", 8), fg=BRAND["text"], bg=BRAND["surface"])
-        self.lbl_lines.pack(side=tk.RIGHT, padx=6)
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 6))
 
         self.log_notebook = ttk.Notebook(log_frame)
         self.log_notebook.pack(fill=tk.BOTH, expand=True)
         self.log_notebook.bind("<<NotebookTabChanged>>", self._on_log_tab_changed)
+        self.log_notebook.bind("<Button-1>", self._on_tab_left_click)
+        self.log_notebook.bind("<B1-Motion>", self._on_tab_drag)
+        self.log_notebook.bind("<ButtonRelease-1>", self._on_tab_release)
 
-        # Tab management: right-click context menu and middle-click to close
+        # Tab management: inline '×' close button, right-click menu, and middle-click to close
         self.tab_menu = tk.Menu(self.root, tearoff=0, bg=BRAND["surface"], fg=BRAND["text"],
                                 activebackground=BRAND["accent"], activeforeground=BRAND["accent_text"])
         self.tab_menu.add_command(label="Close Tab", command=self._close_current_tab)
@@ -277,47 +295,122 @@ class BleGuiApp:
             self.log_notebook.bind("<Button-3>", self._on_tab_right_click)
             self.log_notebook.bind("<Button-2>", self._on_tab_middle_click)
 
-        # Tab 1: Dedicated Serial Terminal log
+        # Tab 1: Dedicated Serial Terminal (no System Log tab)
         self.serial_tab = tk.Frame(self.log_notebook, bg=BRAND["bg"])
         self.log_notebook.add(self.serial_tab, text="Serial Terminal")
         self.log_tab_sessions[str(self.serial_tab)] = "serial"
         self.txt_serial = scrolledtext.ScrolledText(
-            self.serial_tab, bg=BRAND["bg"], fg=BRAND["text_dim"],
-            font=BRAND["font_mono"], padx=8, pady=8, wrap=tk.NONE)
+            self.serial_tab, bg=BRAND["log_bg"], fg=BRAND["log_fg"],
+            font=(FONT_MONO_FAMILY, self._log_font_size), padx=8, pady=6, wrap=tk.NONE)
         self.txt_serial.pack(fill=tk.BOTH, expand=True)
         self._configure_log_widget(self.txt_serial)
         self.txt_serial.bind("<Key>", self._on_serial_terminal_key)
+        self.system_tab = None
+        self.txt_terminal = self.txt_serial
 
-        # Tab 2: System / Scan Log
-        self.system_tab = tk.Frame(self.log_notebook, bg=BRAND["bg"])
-        self.log_notebook.add(self.system_tab, text="System Log")
-        self.log_tab_sessions[str(self.system_tab)] = "system"
-        self.txt_terminal = scrolledtext.ScrolledText(
-            self.system_tab, bg=BRAND["bg"], fg=BRAND["text_dim"],
-            font=("Consolas", 9), padx=8, pady=8, wrap=tk.NONE)
-        self.txt_terminal.pack(fill=tk.BOTH, expand=True)
-        self._configure_log_widget(self.txt_terminal)
-
-    def _configure_log_widget(self, widget):
-        """Give a log text widget the dark colours and the colour tags used by log lines."""
-        widget.configure(bg=BRAND["bg"], fg=BRAND["text_dim"],
-                         insertbackground=BRAND["text"],
+    def _apply_log_widget_colors(self, widget):
+        """Apply current Light/Dark theme colours and font size to a log/terminal Text widget."""
+        sz = self._log_font_size
+        font_reg = (FONT_MONO_FAMILY, sz)
+        font_bold = (FONT_MONO_FAMILY, sz, "bold")
+        widget.configure(bg=BRAND["log_bg"], fg=BRAND["log_fg"], font=font_reg,
+                         insertbackground=BRAND["log_fg"],
                          selectbackground=BRAND["accent_dark"],
                          selectforeground=BRAND["accent_text"])
-        widget.tag_config("default", foreground=BRAND["text_dim"])
-        widget.tag_config("device", foreground=BRAND["text_dim"])
-        widget.tag_config("system", foreground=BRAND["info"])
-        widget.tag_config("gps", foreground="#4ade80", font=("Consolas", 9, "bold"))
-        widget.tag_config("warning", foreground=BRAND["warn"])
-        widget.tag_config("error", foreground=BRAND["err"])
-        widget.tag_config("diag_warn", foreground=BRAND["warn"])
-        widget.tag_config("diag_err", foreground=BRAND["err"])
-        widget.tag_config("diag_info", foreground=BRAND["info"])
-        widget.tag_config("hi_success", foreground="#052e16", background="#4ade80", font=("Consolas", 9, "bold"))
-        widget.tag_config("hi_warn", foreground="#451a03", background="#fbbf24", font=("Consolas", 9, "bold"))
-        widget.tag_config("hi_error", foreground="#450a0a", background="#f87171", font=("Consolas", 9, "bold"))
+        widget.tag_config("default", foreground=BRAND["log_fg"])
+        widget.tag_config("device", foreground=BRAND["log_device"])
+        widget.tag_config("system", foreground=BRAND["log_sys"])
+        widget.tag_config("gps", foreground=BRAND["log_gps"], font=font_bold)
+        widget.tag_config("warning", foreground=BRAND["log_warn"])
+        widget.tag_config("error", foreground=BRAND["log_err"])
+        widget.tag_config("diag_warn", foreground=BRAND["log_warn"])
+        widget.tag_config("diag_err", foreground=BRAND["log_err"])
+        widget.tag_config("diag_info", foreground=BRAND["log_sys"])
+        widget.tag_config("hi_success", foreground="#052e16", background="#4ade80", font=font_bold)
+        widget.tag_config("hi_warn", foreground="#451a03", background="#fbbf24", font=font_bold)
+        widget.tag_config("hi_error", foreground="#450a0a", background="#f87171", font=font_bold)
         widget.tag_config("search_hit", background=BRAND["warn"], foreground="#000000")
         widget.tag_config("search_cur", background=BRAND["accent"], foreground=BRAND["accent_text"])
+        # Native ANSI SGR terminal colours (30..37, 90..97) adapted for Dark & Light themes
+        ansi_map = {
+            30: "#64748b", 31: "#f87171", 32: "#4ade80", 33: "#facc15",
+            34: "#60a5fa", 35: "#e879f9", 36: "#22d3ee", 37: "#f8fafc",
+            90: "#94a3b8", 91: "#fca5a5", 92: "#86efac", 93: "#fde047",
+            94: "#93c5fd", 95: "#f0abfc", 96: "#67e8f9", 97: "#ffffff",
+        } if get_theme_mode() == "dark" else {
+            30: "#334155", 31: "#dc2626", 32: "#15803d", 33: "#b45309",
+            34: "#1d4ed8", 35: "#a21caf", 36: "#0e7490", 37: "#1e293b",
+            90: "#64748b", 91: "#ef4444", 92: "#16a34a", 93: "#ca8a04",
+            94: "#2563eb", 95: "#c026d3", 96: "#0891b2", 97: "#0f172a",
+        }
+        for code, col in ansi_map.items():
+            widget.tag_config(f"ansi_{code}", foreground=col)
+            widget.tag_config(f"ansi_{code}_b", foreground=col, font=font_bold)
+        widget.tag_config("ansi_bold", font=font_bold)
+
+    def _configure_log_widget(self, widget):
+        """Give a log text widget crisp standard text, colour tags, and VS Code-style wheel zoom."""
+        self._apply_log_widget_colors(widget)
+        # VS Code-style text zoom: Ctrl+Wheel (Win/Linux), Command+Wheel (macOS), Ctrl/Cmd + / - / 0
+        widget.bind("<Control-MouseWheel>", self._on_log_wheel_zoom)
+        widget.bind("<Command-MouseWheel>", self._on_log_wheel_zoom)
+        widget.bind("<Control-Button-4>", lambda _e: self._zoom_log_font(1))
+        widget.bind("<Control-Button-5>", lambda _e: self._zoom_log_font(-1))
+        for mod in ("Control", "Command"):
+            widget.bind(f"<{mod}-plus>", lambda _e: self._zoom_log_font(1))
+            widget.bind(f"<{mod}-equal>", lambda _e: self._zoom_log_font(1))
+            widget.bind(f"<{mod}-KP_Add>", lambda _e: self._zoom_log_font(1))
+            widget.bind(f"<{mod}-minus>", lambda _e: self._zoom_log_font(-1))
+            widget.bind(f"<{mod}-KP_Subtract>", lambda _e: self._zoom_log_font(-1))
+            widget.bind(f"<{mod}-0>", lambda _e: self._set_log_font_size(10))
+            widget.bind(f"<{mod}-KP_0>", lambda _e: self._set_log_font_size(10))
+
+    def toggle_theme(self):
+        """Switch live between Light and Dark themes and remember the choice."""
+        new_mode = "light" if get_theme_mode() == "dark" else "dark"
+        old_palette = set_theme_mode(new_mode)
+        user_settings.put("theme", new_mode)
+        apply_brand_theme(self.root)
+        retheme_widget_tree(self.root, old_palette, BRAND)
+        for w in (getattr(self, "txt_serial", None), getattr(self, "txt_terminal", None),
+                  *self.device_log_widgets.values()):
+            if w is not None:
+                try:
+                    self._apply_log_widget_colors(w)
+                except tk.TclError:
+                    pass
+        self.header.refresh_theme_button()
+
+    def _on_log_wheel_zoom(self, event):
+        delta = getattr(event, "delta", 0)
+        if delta > 0:
+            return self._zoom_log_font(1)
+        if delta < 0:
+            return self._zoom_log_font(-1)
+        return "break"
+
+    def _zoom_log_font(self, step: int):
+        return self._set_log_font_size(self._log_font_size + step)
+
+    def _set_log_font_size(self, size: int):
+        new_size = max(7, min(28, int(size)))
+        if new_size == self._log_font_size:
+            return "break"
+        self._log_font_size = new_size
+        font_reg = (FONT_MONO_FAMILY, new_size)
+        font_bold = (FONT_MONO_FAMILY, new_size, "bold")
+        widgets = [getattr(self, "txt_serial", None), getattr(self, "txt_terminal", None)]
+        widgets.extend(self.device_log_widgets.values())
+        for w in widgets:
+            if w is None:
+                continue
+            try:
+                w.configure(font=font_reg)
+                for tag in ("gps", "hi_success", "hi_warn", "hi_error"):
+                    w.tag_config(tag, font=font_bold)
+            except tk.TclError:
+                pass
+        return "break"
 
     @staticmethod
     def _classify_log_tag(msg: str, default_tag: str = "default") -> str:
@@ -351,20 +444,59 @@ class BleGuiApp:
             if frame:
                 status = self.session_status.get(session_id, "")
                 suffix = f" - {status.upper()}" if status else ""
-                self.log_notebook.tab(frame, text=f"{name} [{address}]{suffix}")
+                self.log_notebook.tab(frame, text=f"{name} [{address}]{suffix}   ×")
             return self.device_log_widgets[session_id]
 
         frame = tk.Frame(self.log_notebook, bg=BRAND["bg"])
         status = self.session_status.get(session_id, "connecting")
         suffix = f" - {status.upper()}" if status else ""
-        self.log_notebook.add(frame, text=f"{name} [{address}]{suffix}")
+        self.log_notebook.add(frame, text=f"{name} [{address}]{suffix}   ×")
         self.log_tab_sessions[str(frame)] = session_id
 
         # -----------------------------------------------------------------------------------
-        # Live Activities & Telemetry Dashboard Strip (Inside Tab)
+        # Resizable VS Code-style Split Pane: Log/Map (left) | Scrollable Telemetry (right)
         # -----------------------------------------------------------------------------------
-        dash = tk.Frame(frame, bg=BRAND["surface"], padx=8, pady=6, relief=tk.FLAT)
-        dash.pack(fill=tk.Y, side=tk.RIGHT, padx=(4, 0))   # vertical panel on the right
+        h_split = tk.PanedWindow(frame, orient=tk.HORIZONTAL, sashwidth=6, sashrelief=tk.FLAT,
+                                 bg=BRAND["border"], bd=0)
+        h_split.pack(fill=tk.BOTH, expand=True)
+
+        log_pane = tk.PanedWindow(h_split, orient=tk.VERTICAL, sashwidth=6, sashrelief=tk.FLAT,
+                                  bg=BRAND["border"], bd=0)
+        h_split.add(log_pane, stretch="always", minsize=320)
+
+        dash_outer = tk.Frame(h_split, bg=BRAND["surface"], width=265)
+        h_split.add(dash_outer, stretch="never", minsize=190, width=265)
+
+        dash_canvas = tk.Canvas(dash_outer, bg=BRAND["surface"], highlightthickness=0, bd=0)
+        dash_sb = ttk.Scrollbar(dash_outer, orient=tk.VERTICAL, command=dash_canvas.yview)
+        dash_canvas.configure(yscrollcommand=dash_sb.set)
+        dash_sb.pack(side=tk.RIGHT, fill=tk.Y)
+        dash_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        dash = tk.Frame(dash_canvas, bg=BRAND["surface"], padx=6, pady=4, relief=tk.FLAT)
+        dash_win_id = dash_canvas.create_window((0, 0), window=dash, anchor="nw")
+
+        def _sync_dash_scroll(_e=None, c=dash_canvas, d=dash):
+            c.configure(scrollregion=c.bbox("all"))
+
+        def _sync_dash_width(event, c=dash_canvas, wid=dash_win_id):
+            c.itemconfigure(wid, width=event.width)
+
+        def _on_dash_wheel(event, c=dash_canvas):
+            delta = getattr(event, "delta", 0)
+            if delta:
+                step = -1 if delta > 0 else 1
+                if abs(delta) >= 120:
+                    step = int(-delta / 120)
+                c.yview_scroll(step, "units")
+                return "break"
+            return None
+
+        dash.bind("<Configure>", _sync_dash_scroll)
+        dash_canvas.bind("<Configure>", _sync_dash_width)
+        dash_canvas.bind("<MouseWheel>", _on_dash_wheel)
+        dash_canvas.bind("<Button-4>", lambda _e, c=dash_canvas: c.yview_scroll(-1, "units"))
+        dash_canvas.bind("<Button-5>", lambda _e, c=dash_canvas: c.yview_scroll(1, "units"))
 
         # Row 1: Primary Telemetry, Reporting Counters, Device Actual Clock, Close Tab button
         row1 = tk.Frame(dash, bg=BRAND["surface"])
@@ -511,17 +643,23 @@ class BleGuiApp:
         )
         lbl_uptime.pack(side=tk.TOP, fill=tk.X, anchor=tk.W, pady=2)
 
+        # Bind mouse-wheel on all sidebar child widgets so hovering anywhere scrolls the sidebar cleanly
+        def _bind_wheel_recursive(w):
+            w.bind("<MouseWheel>", _on_dash_wheel, add="+")
+            w.bind("<Button-4>", lambda _e, c=dash_canvas: c.yview_scroll(-1, "units"), add="+")
+            w.bind("<Button-5>", lambda _e, c=dash_canvas: c.yview_scroll(1, "units"), add="+")
+            for ch in w.winfo_children():
+                _bind_wheel_recursive(ch)
+        _bind_wheel_recursive(dash)
+
         # Live view of the device's application above the log (GiGO devices, added by _apply_tab_profile), the log
         # text, and the floating GPS map in its bottom-right corner (GPS trackers)
-        log_pane = tk.PanedWindow(frame, orient=tk.VERTICAL, sashwidth=6, sashrelief=tk.FLAT, bg=BRAND["border"],
-                                  bd=0)
-        log_pane.pack(fill=tk.BOTH, expand=True)
         log_container = tk.Frame(log_pane, bg=BRAND["bg"])
         log_pane.add(log_container, stretch="always")
 
         text = scrolledtext.ScrolledText(
-            log_container, bg=BRAND["bg"], fg=BRAND["text_dim"],
-            font=("Consolas", 9), padx=8, pady=8, wrap=tk.NONE)
+            log_container, bg=BRAND["log_bg"], fg=BRAND["log_fg"],
+            font=(FONT_MONO_FAMILY, self._log_font_size), padx=8, pady=6, wrap=tk.NONE)
         text.pack(fill=tk.BOTH, expand=True)
         self._configure_log_widget(text)
 
@@ -670,6 +808,49 @@ class BleGuiApp:
                 except Exception:
                     pass
                 telem[key] = None
+
+    def _on_tab_left_click(self, event):
+        """VS Code-style inline '×' close button + start drag-to-reorder on any tab."""
+        self._drag_tab_id = None
+        try:
+            clicked_tab = self.log_notebook.tk.call(self.log_notebook._w, "identify", "tab", event.x, event.y)
+            if clicked_tab is None or str(clicked_tab) == "":
+                return None
+            tab_idx = int(clicked_tab)
+            tab_id = self.log_notebook.tabs()[tab_idx]
+            session_id = self.log_tab_sessions.get(str(tab_id))
+            if session_id and session_id not in ("serial", "system"):
+                # If 22 px to the right is no longer the same tab, the click landed on the trailing '×'.
+                probe = self.log_notebook.tk.call(self.log_notebook._w, "identify", "tab", event.x + 22, event.y)
+                if str(probe) != str(tab_idx):
+                    self._close_device_tab(session_id)
+                    return "break"
+            self._drag_tab_id = tab_id
+        except Exception:
+            pass
+        return None
+
+    def _on_tab_drag(self, event):
+        """Drag any tab left or right to reorder tabs (VS Code style)."""
+        if not self._drag_tab_id:
+            return
+        try:
+            target = self.log_notebook.tk.call(self.log_notebook._w, "identify", "tab", event.x, event.y)
+            if target is None or str(target) == "":
+                return
+            target_idx = int(target)
+            tabs = list(self.log_notebook.tabs())
+            if self._drag_tab_id not in tabs:
+                self._drag_tab_id = None
+                return
+            cur_idx = tabs.index(self._drag_tab_id)
+            if target_idx != cur_idx:
+                self.log_notebook.insert(target_idx, self._drag_tab_id)
+        except Exception:
+            pass
+
+    def _on_tab_release(self, _event):
+        self._drag_tab_id = None
 
     def _on_tab_right_click(self, event):
         """Show context menu on right click of a notebook tab."""
@@ -1526,13 +1707,25 @@ class BleGuiApp:
                 if session_id and session_id in self.device_log_widgets:
                     widget = self.device_log_widgets[session_id]
                     self._insert_log_widget(widget, msg + "\n", tag, session_id)
-                    # Mirror to system log so complete stream is always reviewable
-                    self._insert_log_widget(self.txt_terminal, msg + "\n", tag, None)
                 else:
-                    self._insert_log_widget(self.txt_terminal, msg + "\n", tag, None)
+                    # System Log tab removed: surface global status notes concisely in the top bar
+                    clean = msg.split("] ", 1)[-1].strip() if "] " in msg else msg.strip()
+                    if clean:
+                        self.lbl_details.config(text=clean[:80])
 
             elif msg_type == "serial_rx":
                 self._on_serial_rx(item)
+
+            elif msg_type == "serial_disconnected":
+                self.serial.close()
+                if self._serial_want_open and self._serial_last_open:
+                    self.btn_serial.config(text="Cancel reconnect")
+                    self.lbl_serial_state.config(text="--- reconnecting...", fg=BRAND["warn"])
+                    self._schedule_serial_reconnect(1000)
+                else:
+                    self.btn_serial.config(text="Open port")
+                    self.lbl_serial_state.config(text="--- closed", fg=BRAND["text_muted"])
+                    self.root.after(800, self._serial_refresh)
 
             elif msg_type == "status_update":
                 self.lbl_status.config(text=item["status"], bg=item["color"])
@@ -1664,7 +1857,7 @@ class BleGuiApp:
                     self._apply_tab_profile(telem_tab, profile, session_id)
                 session_tab = self.device_log_frames.get(session_id)
                 if session_tab:
-                    self.log_notebook.tab(session_tab, text=f"{name} [{address}] - {status.upper()}")
+                    self.log_notebook.tab(session_tab, text=f"{name} [{address}] - {status.upper()}   ×")
                 # Never steal the operator's tab/selection here: with several devices connected,
                 # a background reconnect of device A must not yank the view away from device B.
                 self._sync_selected_session_controls()
@@ -1693,24 +1886,21 @@ class BleGuiApp:
     def _build_serial_panel(self):
         self.serial = SerialEngine()
 
-        wrap = tk.Frame(self.root, bg=BRAND["surface"], padx=8, pady=6)
-        wrap.pack(fill=tk.X, padx=10, pady=(0, 4))
-
-        # --- header row: title + collapse toggle -----------------------------------------
-        head = tk.Frame(wrap, bg=BRAND["surface"])
-        head.pack(fill=tk.X)
-        tk.Label(head, text="SERIAL TERMINAL", font=("Segoe UI", 9, "bold"),
-                 fg=BRAND["accent"], bg=BRAND["surface"]).pack(side=tk.LEFT)
-        self.lbl_serial_state = tk.Label(head, text="--- closed", font=("Consolas", 8, "bold"),
-                                         fg=BRAND["text_muted"], bg=BRAND["surface"])
-        self.lbl_serial_state.pack(side=tk.LEFT, padx=10)
+        wrap = tk.Frame(self.root, bg=BRAND["surface"], padx=6, pady=3)
+        wrap.pack(fill=tk.X, padx=8, pady=(0, 3))
 
         self._serial_open_row = tk.Frame(wrap, bg=BRAND["surface"])
-        self._serial_open_row.pack(fill=tk.X, pady=(5, 0))
+        self._serial_open_row.pack(fill=tk.X)
 
         row = self._serial_open_row
 
-        def lbl(text, pad=(8, 2)):
+        tk.Label(row, text="SERIAL", font=("Segoe UI", 8, "bold"),
+                 fg=BRAND["accent"], bg=BRAND["surface"]).pack(side=tk.LEFT, padx=(2, 4))
+        self.lbl_serial_state = tk.Label(row, text="--- closed", font=(FONT_MONO_FAMILY, 8, "bold"),
+                                         fg=BRAND["text_muted"], bg=BRAND["surface"])
+        self.lbl_serial_state.pack(side=tk.LEFT, padx=(0, 8))
+
+        def lbl(text, pad=(6, 2)):
             """Small bold label in the serial settings row."""
             tk.Label(row, text=text, font=("Segoe UI", 8, "bold"), fg=BRAND["text_dim"],
                      bg=BRAND["surface"]).pack(side=tk.LEFT, padx=pad)
@@ -1725,12 +1915,10 @@ class BleGuiApp:
             return c
 
         lbl("Port", (0, 2))
-        self.cmb_port = combo([], 26)
-        self.cmb_port.pack_forget()
-        self.cmb_port.pack(side=tk.LEFT, padx=2)
+        self.cmb_port = combo([], 24)
 
-        self._btn(row, "---", self._serial_refresh, BRAND["surface_alt"]).pack(
-            side=tk.LEFT, padx=(2, 8))
+        self._btn(row, "↻", self._serial_refresh, BRAND["surface_alt"]).pack(
+            side=tk.LEFT, padx=(2, 6))
 
         lbl("Baud")
         self.cmb_baud = combo(BAUD_RATES, 8, "115200")
@@ -1739,20 +1927,20 @@ class BleGuiApp:
         self.cmb_data = combo(["8", "7", "6", "5"], 3, "8")
 
         lbl("Parity")
-        self.cmb_parity = combo(list(PARITY_MAP), 6, "None")
+        self.cmb_parity = combo(list(PARITY_MAP), 5, "None")
 
         lbl("Stop")
         self.cmb_stop = combo(list(STOPBITS_MAP), 3, "1")
 
         lbl("Flow")
-        self.cmb_flow = combo(list(FLOW_MAP), 8, "None")
+        self.cmb_flow = combo(list(FLOW_MAP), 7, "None")
 
         self.btn_serial = self._btn(row, "Open port", self._serial_toggle)
-        self.btn_serial.pack(side=tk.LEFT, padx=(8, 0))
+        self.btn_serial.pack(side=tk.LEFT, padx=(6, 0))
 
         # --- send row ---------------------------------------------------------------------
         send_row = tk.Frame(wrap, bg=BRAND["surface"])
-        send_row.pack(fill=tk.X, pady=(6, 0))
+        send_row.pack(fill=tk.X, pady=(3, 0))
 
         self.ent_send = tk.Entry(send_row, bg=BRAND["surface_alt"], fg=BRAND["text"],
                                  insertbackground=BRAND["text"], font=("Consolas", 9),
@@ -1800,6 +1988,9 @@ class BleGuiApp:
 
         self._serial_history_buf = []
         self._serial_history_pos = -1
+        self._serial_want_open = False
+        self._serial_last_open = None
+        self._serial_reconn_job = None
 
         self._serial_refresh()
 
@@ -1816,9 +2007,48 @@ class BleGuiApp:
             self.btn_serial.config(state=tk.DISABLED)
             self.lbl_serial_state.config(text="--- pyserial missing", fg=BRAND["warn"])
 
+    def _cancel_serial_reconnect(self):
+        if self._serial_reconn_job is not None:
+            try:
+                self.root.after_cancel(self._serial_reconn_job)
+            except tk.TclError:
+                pass
+            self._serial_reconn_job = None
+
+    def _schedule_serial_reconnect(self, delay_ms: int = 1000):
+        self._cancel_serial_reconnect()
+        self._serial_reconn_job = self.root.after(delay_ms, self._serial_try_reconnect)
+
+    def _serial_try_reconnect(self):
+        self._serial_reconn_job = None
+        if not self._serial_want_open or not self._serial_last_open or self.serial.is_open:
+            return
+        self._serial_refresh()
+        port, baud, data, parity, stop, flow = self._serial_last_open
+        want_dev = port.split("  -  ")[0].strip().lower()
+        ports = SerialEngine.available_ports() if SERIAL_AVAILABLE else []
+        match = next((p for p in ports if p.split("  -  ")[0].strip().lower() == want_dev), None)
+        if match is None:
+            self._schedule_serial_reconnect(1000)
+            return
+        try:
+            self.serial.open(match, baud, data, parity, stop, flow)
+        except Exception:
+            self._schedule_serial_reconnect(1000)
+            return
+        self.cmb_port.set(match)
+        self._serial_last_open = (match, baud, data, parity, stop, flow)
+        self.btn_serial.config(text="Close port")
+        self.lbl_serial_state.config(text="--- open", fg=BRAND["ok"])
+        msg = f"Serial reconnected: {match} @ {baud} {data}{parity}{stop}"
+        log_system(msg, BRAND["ok"])
+        self.insert_serial(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}\n", "system")
+
     def _serial_toggle(self):
-        """Open the serial port with the chosen settings, or close it when it is open."""
-        if self.serial.is_open:
+        """Open the serial port with the chosen settings, or close / cancel reconnect when active."""
+        if self.serial.is_open or self._serial_want_open:
+            self._serial_want_open = False
+            self._cancel_serial_reconnect()
             self.serial.close()
             self.btn_serial.config(text="Open port")
             self.lbl_serial_state.config(text="--- closed", fg=BRAND["text_muted"])
@@ -1830,13 +2060,13 @@ class BleGuiApp:
             messagebox.showwarning("No port", "No serial port selected. Plug the device in "
                                               "and press ---.")
             return
+        baud = self.cmb_baud.get()
+        data = self.cmb_data.get()
+        parity = self.cmb_parity.get()
+        stop = self.cmb_stop.get()
+        flow = self.cmb_flow.get()
         try:
-            self.serial.open(port,
-                             self.cmb_baud.get(),
-                             self.cmb_data.get(),
-                             self.cmb_parity.get(),
-                             self.cmb_stop.get(),
-                             self.cmb_flow.get())
+            self.serial.open(port, baud, data, parity, stop, flow)
         except Exception as exc:
             messagebox.showerror("Cannot open port",
                                  f"{port}\n\n{exc}\n\n"
@@ -1844,10 +2074,11 @@ class BleGuiApp:
             log_system(f"Serial open failed: {exc}", BRAND["err"])
             return
 
+        self._serial_want_open = True
+        self._serial_last_open = (port, baud, data, parity, stop, flow)
         self.btn_serial.config(text="Close port")
         self.lbl_serial_state.config(text="--- open", fg=BRAND["ok"])
-        open_msg = (f"Serial open: {port} @ {self.cmb_baud.get()} "
-                    f"{self.cmb_data.get()}{self.cmb_parity.get()}{self.cmb_stop.get()}")
+        open_msg = f"Serial open: {port} @ {baud} {data}{parity}{stop}"
         log_system(open_msg, BRAND["ok"])
         self.insert_serial(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {open_msg}\n", "system")
         try:
@@ -1896,7 +2127,7 @@ class BleGuiApp:
 
         if event.keysym in ("Return", "KP_Enter"):
             payload = EOL_MAP.get(self.cmb_eol.get(), b"\r")
-        elif event.keysym == "BackSpace":
+        elif event.keysym == "BackSpace" or event.char in ("\x08", "\x7f"):
             payload = b"\x08"
         elif event.keysym == "Tab":
             payload = b"\t"
@@ -1910,6 +2141,13 @@ class BleGuiApp:
                 payload,
                 on_error=lambda exc: self.root.after(0, lambda e=exc: log_system(f"Serial write failed: {e}", BRAND["err"])),
             )
+            if self.var_echo.get() and not self.var_hex_rx.get():
+                if payload == b"\x08":
+                    self.insert_serial("\x08")
+                elif event.keysym in ("Return", "KP_Enter"):
+                    self.insert_serial("\n")
+                elif event.char:
+                    self.insert_serial(event.char)
         except Exception as exc:
             log_system(f"Serial write failed: {exc}", BRAND["err"])
         return "break"
@@ -1969,10 +2207,83 @@ class BleGuiApp:
         tag = self._classify_log_tag(text)
         self.insert_serial(text, tag)
 
+    def _active_serial_tag(self, fallback_tag: str) -> str:
+        if self._serial_ansi_fg is not None:
+            return f"ansi_{self._serial_ansi_fg}_b" if self._serial_ansi_bold else f"ansi_{self._serial_ansi_fg}"
+        if self._serial_ansi_bold:
+            return "ansi_bold"
+        return fallback_tag
+
+    def _apply_ansi_sgr(self, params: str) -> None:
+        codes = [int(p) for p in params.split(";") if p.isdigit()] if params else [0]
+        for code in codes:
+            if code == 0:
+                self._serial_ansi_fg = None
+                self._serial_ansi_bold = False
+            elif code == 1:
+                self._serial_ansi_bold = True
+            elif code == 22:
+                self._serial_ansi_bold = False
+            elif code == 39:
+                self._serial_ansi_fg = None
+            elif (30 <= code <= 37) or (90 <= code <= 97):
+                self._serial_ansi_fg = code
+
     def insert_serial(self, text: str, tag: str = "default"):
-        """Append text to the serial log tab."""
+        """Append text to the serial log tab with native ANSI colour codes and terminal backspace."""
         widget = getattr(self, "txt_serial", self.txt_terminal)
-        self._insert_log_widget(widget, text, tag, "serial")
+        if not text:
+            return
+        if getattr(self.serial, "hex_rx", False):
+            self._insert_log_widget(widget, text, tag, "serial")
+            return
+        if "\x1b" not in text and "\x08" not in text and "\x7f" not in text and self._serial_ansi_fg is None and not self._serial_ansi_bold:
+            self._insert_log_widget(widget, text, tag, "serial")
+            return
+
+        # Parse ANSI escape sequences (\x1b[...m for SGR colour; strip non-SGR CSI) and BS/DEL inline.
+        line_delta = 0
+        pos = 0
+        n = len(text)
+        buf = []
+
+        def _flush():
+            nonlocal line_delta
+            if not buf:
+                return
+            chunk = "".join(buf)
+            widget.insert(tk.END, chunk, self._active_serial_tag(tag))
+            line_delta += chunk.count("\n")
+            buf.clear()
+
+        while pos < n:
+            ch = text[pos]
+            if ch == "\x1b" and pos + 1 < n and text[pos + 1] == "[":
+                end = pos + 2
+                while end < n and (text[end].isdigit() or text[end] in ";?"):
+                    end += 1
+                if end < n:
+                    _flush()
+                    if text[end] == "m":
+                        self._apply_ansi_sgr(text[pos + 2:end])
+                    pos = end + 1
+                    continue
+            if ch in ("\x08", "\x7f"):
+                _flush()
+                if widget.compare("end-1c", ">", "end-1c linestart"):
+                    widget.delete("end-2c", "end-1c")
+                pos += 1
+                continue
+            buf.append(ch)
+            pos += 1
+        _flush()
+
+        if line_delta:
+            self.device_log_counts["serial"] = self.device_log_counts.get("serial", 0) + line_delta
+            if self.log_notebook.select() == str(getattr(self, "serial_tab", "")):
+                self.lbl_lines.config(text=f"Lines: {self.device_log_counts['serial']}")
+        if self.var_autoscroll.get():
+            widget.see(tk.END)
 
     def insert_terminal(self, text: str, tag: str = "default"):
         """Append text to the system log tab."""
@@ -2069,47 +2380,84 @@ class BleGuiApp:
         self.lbl_lines.config(text="Lines: 0")
         log_system("Log view cleared.", BRAND["text_dim"], session_id=session_id)
 
+    def _focus_search(self, _event=None):
+        """Focus and select the Find input box (Ctrl+F / Cmd+F)."""
+        self._search_entry.focus_set()
+        self._search_entry.selection_range(0, tk.END)
+        return "break"
+
+    def _search_focus_match(self, widget, idx: int):
+        """Highlight and scroll to match ``idx`` and update the VS Code-style counter."""
+        total = len(self._search_matches)
+        if total == 0:
+            self._search_idx = -1
+            if hasattr(self, "lbl_search_count"):
+                self.lbl_search_count.config(text="No results", fg=BRAND["err"])
+            return
+        self._search_idx = idx % total
+        start, end = self._search_matches[self._search_idx]
+        widget.tag_remove("search_cur", "1.0", tk.END)
+        widget.tag_add("search_cur", start, end)
+        widget.tag_raise("search_cur")
+        widget.tag_config("search_cur", background=BRAND["accent"], foreground=BRAND["accent_text"])
+        widget.mark_set(tk.INSERT, start)
+        widget.see(start)
+        if hasattr(self, "lbl_search_count"):
+            self.lbl_search_count.config(text=f"{self._search_idx + 1}/{total}", fg=BRAND["text_dim"])
+
     def _search_apply(self):
-        """Highlight every match as the user types; no-op when the box is empty."""
+        """Highlight every match as the user types and jump to the first match (VS Code Find)."""
         widget, _ = self._current_log_widget()
         widget.tag_remove("search_hit", "1.0", tk.END)
+        widget.tag_remove("search_cur", "1.0", tk.END)
+        self._search_matches = []
+        self._search_idx = -1
         needle = self.search_var.get()
         if not needle:
+            if hasattr(self, "lbl_search_count"):
+                self.lbl_search_count.config(text="", fg=BRAND["text_dim"])
             return
         start = "1.0"
-        hits = 0
         while True:
             pos = widget.search(needle, start, stopindex=tk.END, nocase=True)
             if not pos:
                 break
             end = f"{pos}+{len(needle)}c"
             widget.tag_add("search_hit", pos, end)
+            self._search_matches.append((pos, end))
             start = end
-            hits += 1
-            if hits > 5000:          # guard against a pathological buffer
+            if len(self._search_matches) >= 5000:
                 break
         widget.tag_config("search_hit", background=BRAND["warn"], foreground="#000000")
+        self._search_focus_match(widget, 0)
 
     def _search_next(self):
-        """Jump to the next match, wrapping at the end. Enter in the search box."""
-        needle = self.search_var.get()
-        if not needle:
+        """Jump to the next match (▼ or Enter)."""
+        if not self.search_var.get():
             return
         widget, _ = self._current_log_widget()
-        pos = widget.search(needle, tk.INSERT, stopindex=tk.END, nocase=True)
-        if not pos:
-            pos = widget.search(needle, "1.0", stopindex=tk.END, nocase=True)
-        if pos:
-            widget.mark_set(tk.INSERT, pos)
-            widget.see(pos)
-            widget.tag_remove("search_cur", "1.0", tk.END)
-            widget.tag_add("search_cur", pos, f"{pos}+{len(needle)}c")
-            widget.tag_config("search_cur", background=BRAND["accent"],
-                              foreground=BRAND["accent_text"])
+        if not self._search_matches:
+            self._search_apply()
+            return
+        self._search_focus_match(widget, self._search_idx + 1)
+
+    def _search_prev(self):
+        """Jump to the previous match (▲ or Shift+Enter)."""
+        if not self.search_var.get():
+            return
+        widget, _ = self._current_log_widget()
+        if not self._search_matches:
+            self._search_apply()
+            return
+        self._search_focus_match(widget, self._search_idx - 1)
 
     def _search_clear(self):
-        """Clear the search box and remove the search highlights from the visible log."""
+        """Clear the Find box and remove all search highlights (× or Esc)."""
         self.search_var.set("")
+        self._search_matches = []
+        self._search_idx = -1
+        if hasattr(self, "lbl_search_count"):
+            self.lbl_search_count.config(text="", fg=BRAND["text_dim"])
         widget, _ = self._current_log_widget()
         widget.tag_remove("search_hit", "1.0", tk.END)
         widget.tag_remove("search_cur", "1.0", tk.END)
