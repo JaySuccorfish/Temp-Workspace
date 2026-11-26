@@ -52,7 +52,8 @@ param(
     [switch]$Clean,
 
     [string]$PythonExe = '',
-    [switch]$NoSmokeTest
+    [switch]$NoSmokeTest,
+    [switch]$Installer
 )
 
 $ErrorActionPreference = 'Stop'
@@ -384,4 +385,52 @@ if (-not $NoSmokeTest) {
 }
 
 Write-Host ''
+if ($Installer) {
+    Write-Step 'Building Windows Setup installer (Inno Setup)'
+    $issFile = Join-Path $ScriptDir 'installer\SuccorfishBLEMonitor.iss'
+    if (-not (Test-Path $issFile)) { throw "Inno Setup script not found: $issFile" }
+
+    $isccCandidates = @(
+        'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+        'C:\Program Files\Inno Setup 6\ISCC.exe',
+        "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+    )
+    $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $iscc) {
+        $cmd = Get-Command 'iscc' -ErrorAction SilentlyContinue
+        if ($cmd) { $iscc = $cmd.Source }
+    }
+    if (-not $iscc) {
+        $wg = Get-Command 'winget' -ErrorAction SilentlyContinue
+        if ($wg) {
+            Write-Warn 'Inno Setup 6 not found; installing via winget (per-user)...'
+            $wgRes = Invoke-NativeCapture -FilePath $wg.Source -Arguments @(
+                'install', '-e', '--id', 'JRSoftware.InnoSetup',
+                '--scope', 'user', '--accept-package-agreements', '--accept-source-agreements'
+            )
+            $iscc = $isccCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+        }
+    }
+    if (-not $iscc) {
+        throw 'Inno Setup 6 (ISCC.exe) is required for -Installer. Install from https://jrsoftware.org/isinfo.php'
+    }
+
+    $instVer = if ($Version) { ($Version -replace '\.0$', '') } else { '2.4.0' }
+    $srcDir = if ($Mode -eq 'OneDir') { Join-Path $DistDir $AppName } else { $DistDir }
+    $isccRes = Invoke-NativeCapture -FilePath $iscc -Arguments @(
+        "/DMyAppVersion=$instVer",
+        "/DSourceDir=$srcDir",
+        "/DOutputDir=$DistDir",
+        $issFile
+    )
+    if ($isccRes.ExitCode -ne 0) {
+        Write-Warn $isccRes.Output
+        throw "Inno Setup failed (exit $($isccRes.ExitCode))"
+    }
+    $setupExe = Join-Path $DistDir "SuccorfishBLEMonitor-Setup-v$instVer.exe"
+    if (Test-Path $setupExe) {
+        $setupMb = [math]::Round((Get-Item $setupExe).Length / 1MB, 2)
+        Write-Ok "$setupExe  ($setupMb MB, standard Windows installer)"
+    }
+}
 Write-Ok "done. Distribute the artefact from: $DistDir"
