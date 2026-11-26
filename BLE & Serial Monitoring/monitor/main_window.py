@@ -2588,7 +2588,7 @@ class BleGuiApp:
         btn_row = tk.Frame(body, bg=BRAND["surface"])
         btn_row.pack(fill=tk.X, pady=(4, 0))
 
-        btn_download = self._btn(btn_row, "Download & Install", lambda: None, BRAND["ok"])
+        btn_download = self._btn(btn_row, "Update from Git", lambda: None, BRAND["ok"])
         btn_download.config(state=tk.DISABLED)
         btn_download.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -2649,7 +2649,7 @@ class BleGuiApp:
                 except Exception as exc:
                     self.root.after(0, lambda e=exc: (
                         lbl_status.config(text=f"Download failed: {e}", fg=BRAND["err"]),
-                        btn_download.config(state=tk.NORMAL, text="Download & Install"),
+                        btn_download.config(state=tk.NORMAL, text="Update from Git"),
                     ))
 
             threading.Thread(target=_dl, name="update-download", daemon=True).start()
@@ -2673,14 +2673,22 @@ class BleGuiApp:
                     text=f"New version available: {info['tag']} ({info.get('asset_name') or 'Release page'})",
                     fg=BRAND["ok"],
                 )
-                btn_download.config(state=tk.NORMAL, command=lambda i=info: _start_online_update(i))
+                btn_download.config(
+                    state=tk.NORMAL,
+                    text=f"Update from Git ({info['tag']})",
+                    command=lambda i=info: _start_online_update(i),
+                )
             else:
                 lbl_status.config(
                     text=f"You are on the latest version (v{BRAND['version']} · latest release {info['tag']}).",
                     fg=BRAND["ok"],
                 )
                 if info.get("asset_url"):
-                    btn_download.config(state=tk.NORMAL, text="Reinstall", command=lambda i=info: _start_online_update(i))
+                    btn_download.config(
+                        state=tk.NORMAL,
+                        text="Update from Git",
+                        command=lambda i=info: _start_online_update(i),
+                    )
 
         def _fetch():
             try:
@@ -2757,7 +2765,7 @@ class BleGuiApp:
         btn_row = tk.Frame(body, bg=BRAND["surface"])
         btn_row.pack(fill=tk.X, pady=(4, 0))
 
-        btn_download = self._btn(btn_row, "Download & Install", lambda: None, BRAND["ok"])
+        btn_download = self._btn(btn_row, "Update from Git", lambda: None, BRAND["ok"])
         btn_download.config(state=tk.DISABLED)
         btn_download.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -2818,7 +2826,7 @@ class BleGuiApp:
                 except Exception as exc:
                     self.root.after(0, lambda e=exc: (
                         lbl_status.config(text=f"Download failed: {e}", fg=BRAND["err"]),
-                        btn_download.config(state=tk.NORMAL, text="Download & Install"),
+                        btn_download.config(state=tk.NORMAL, text="Update from Git"),
                     ))
 
             threading.Thread(target=_dl, name="update-download", daemon=True).start()
@@ -2842,14 +2850,22 @@ class BleGuiApp:
                     text=f"New version available: {info['tag']} ({info.get('asset_name') or 'Release page'})",
                     fg=BRAND["ok"],
                 )
-                btn_download.config(state=tk.NORMAL, command=lambda i=info: _start_online_update(i))
+                btn_download.config(
+                    state=tk.NORMAL,
+                    text=f"Update from Git ({info['tag']})",
+                    command=lambda i=info: _start_online_update(i),
+                )
             else:
                 lbl_status.config(
                     text=f"You are on the latest version (v{BRAND['version']} · latest release {info['tag']}).",
                     fg=BRAND["ok"],
                 )
                 if info.get("asset_url"):
-                    btn_download.config(state=tk.NORMAL, text="Reinstall", command=lambda i=info: _start_online_update(i))
+                    btn_download.config(
+                        state=tk.NORMAL,
+                        text="Update from Git",
+                        command=lambda i=info: _start_online_update(i),
+                    )
 
         def _fetch():
             try:
