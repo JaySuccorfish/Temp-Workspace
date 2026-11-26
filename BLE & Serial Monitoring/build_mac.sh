@@ -71,11 +71,33 @@ fi
 echo "[mac] Installing PyInstaller into portable runtime..."
 "$PORTABLE_PY" -m pip install --disable-pip-version-check --no-input "pyinstaller>=6.10.0"
 
+# Generate macOS .icns from assets/sf_icon_512.png using built-in sips + iconutil
+ICON_ARGS=()
+SRC_ICON="$SCRIPT_DIR/assets/sf_icon_512.png"
+if [ -f "$SRC_ICON" ] && [ -x /usr/bin/sips ] && [ -x /usr/bin/iconutil ]; then
+    ICONSET="$SCRIPT_DIR/.build/sf_icon.iconset"
+    ICNS_OUT="$SCRIPT_DIR/.build/sf_icon.icns"
+    rm -rf "$ICONSET"
+    mkdir -p "$ICONSET"
+    for sz in 16 32 128 256 512; do
+        /usr/bin/sips -z "$sz" "$sz" "$SRC_ICON" --out "$ICONSET/icon_${sz}x${sz}.png" >/dev/null 2>&1 || true
+        dbl=$((sz * 2))
+        if [ "$dbl" -le 512 ]; then
+            /usr/bin/sips -z "$dbl" "$dbl" "$SRC_ICON" --out "$ICONSET/icon_${sz}x${sz}@2x.png" >/dev/null 2>&1 || true
+        fi
+    done
+    if /usr/bin/iconutil -c icns "$ICONSET" -o "$ICNS_OUT" 2>/dev/null && [ -f "$ICNS_OUT" ]; then
+        ICON_ARGS=(--icon "$ICNS_OUT")
+        echo "[mac] Built app icon: $ICNS_OUT"
+    fi
+fi
+
 echo "[mac] Building $APP_NAME.app..."
 "$PORTABLE_PY" -m PyInstaller \
     --noconfirm --clean \
     --name "$APP_NAME" \
     --windowed --onedir \
+    "${ICON_ARGS[@]}" \
     --paths "$SCRIPT_DIR" \
     --collect-submodules monitor \
     --collect-submodules serial \

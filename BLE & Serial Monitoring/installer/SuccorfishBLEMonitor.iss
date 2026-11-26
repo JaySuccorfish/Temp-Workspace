@@ -43,6 +43,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=force
 RestartApplications=yes
+SetupIconFile=..\assets\sf_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Languages]

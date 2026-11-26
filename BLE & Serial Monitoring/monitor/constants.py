@@ -61,6 +61,29 @@ THEME_PALETTES = {
         "log_err":     "#f87171",
         "log_gps":     "#4ade80",
     },
+    "black": {
+        "bg":          "#000000",
+        "surface":     "#0a0a0a",
+        "surface_alt": "#141414",
+        "border":      "#262626",
+        "accent":      "#00d4df",
+        "accent_dark": "#00808c",
+        "accent_text": "#ffffff",
+        "text":        "#ffffff",
+        "text_dim":    "#d4d4d8",
+        "text_muted":  "#71717a",
+        "ok":          "#10b981",
+        "warn":        "#f59e0b",
+        "err":         "#ef4444",
+        "info":        "#38bdf8",
+        "log_bg":      "#000000",
+        "log_fg":      "#ffffff",
+        "log_device":  "#f4f4f5",
+        "log_sys":     "#7dd3fc",
+        "log_warn":    "#fcd34d",
+        "log_err":     "#f87171",
+        "log_gps":     "#4ade80",
+    },
     "light": {
         "bg":          "#f1f5f9",
         "surface":     "#ffffff",
@@ -108,14 +131,28 @@ BRAND = {
 }
 
 
+THEME_ORDER = ("dark", "black", "light")
+
+
 def get_theme_mode() -> str:
-    """Return active theme name: 'dark' or 'light'."""
+    """Return active theme name: 'dark', 'black', or 'light'."""
     return BRAND.get("theme", "dark")
 
 
+def next_theme_mode(current: str | None = None) -> str:
+    """Cycle dark -> black -> light -> dark."""
+    cur = (current or get_theme_mode()).lower().strip()
+    try:
+        idx = THEME_ORDER.index(cur)
+    except ValueError:
+        idx = 0
+    return THEME_ORDER[(idx + 1) % len(THEME_ORDER)]
+
+
 def set_theme_mode(mode: str) -> dict:
-    """Switch BRAND palette in-place to 'dark' or 'light' and return the previous palette dict."""
-    target = "light" if str(mode).lower().strip() == "light" else "dark"
+    """Switch BRAND palette in-place to 'dark', 'black', or 'light' and return the previous palette dict."""
+    key = str(mode or "dark").lower().strip()
+    target = key if key in THEME_PALETTES else "dark"
     old_palette = {k: BRAND[k] for k in THEME_PALETTES["dark"]}
     BRAND.update(THEME_PALETTES[target])
     BRAND["theme"] = target

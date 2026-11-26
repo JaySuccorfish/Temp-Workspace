@@ -308,6 +308,11 @@ if ($Mode -eq 'OneFile') { $pyiArgs += '--onefile' } else { $pyiArgs += '--onedi
 # a windowed exe that fails to import exits silently with no message.
 $pyiArgs += '--windowed'
 
+$iconFile = Join-Path $ScriptDir 'assets\sf_icon.ico'
+if (Test-Path $iconFile) {
+    $pyiArgs += @('--icon', $iconFile)
+}
+
 if ($Version) {
     if ($Version -notmatch '^\d+\.\d+\.\d+\.\d+$') {
         if ($Version -match '^\d+\.\d+\.\d+$') { $Version += '.0' }
