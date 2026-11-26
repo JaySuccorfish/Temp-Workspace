@@ -27,6 +27,7 @@ from .constants import ADV_NAME_PRESETS
 from .constants import BRAND
 from .constants import FONT_MONO_FAMILY
 from .constants import get_theme_mode
+from .constants import next_theme_mode
 from .constants import set_theme_mode
 from .device_profiles import DEVICE_TYPES
 from .device_profiles import device_type_profile
@@ -205,7 +206,7 @@ class BleGuiApp:
 
         self.btn_theme = tk.Button(
             top_bar,
-            text="☀ Light" if get_theme_mode() == "dark" else "🌙 Dark",
+            text=self._theme_button_label(),
             command=self.toggle_theme,
             bg=BRAND["surface_alt"], fg=BRAND["text"],
             activebackground=BRAND["accent_dark"], activeforeground="#ffffff",
@@ -232,9 +233,7 @@ class BleGuiApp:
             def set_link(self, connected: bool, name: str = ""):
                 self._app._set_header_link(connected, name)
             def refresh_theme_button(self):
-                self._app.btn_theme.config(
-                    text="☀ Light" if get_theme_mode() == "dark" else "🌙 Dark"
-                )
+                self._app.btn_theme.config(text=self._app._theme_button_label())
         self.header = _HeaderAdapter(self)
 
         # Global Ctrl+F / Cmd+F opens the floating VS Code-style Find bar
@@ -416,7 +415,7 @@ class BleGuiApp:
             34: "#60a5fa", 35: "#e879f9", 36: "#22d3ee", 37: "#f8fafc",
             90: "#94a3b8", 91: "#fca5a5", 92: "#86efac", 93: "#fde047",
             94: "#93c5fd", 95: "#f0abfc", 96: "#67e8f9", 97: "#ffffff",
-        } if get_theme_mode() == "dark" else {
+        } if get_theme_mode() in ("dark", "black") else {
             30: "#334155", 31: "#dc2626", 32: "#15803d", 33: "#b45309",
             34: "#1d4ed8", 35: "#a21caf", 36: "#0e7490", 37: "#1e293b",
             90: "#64748b", 91: "#ef4444", 92: "#16a34a", 93: "#ca8a04",
@@ -444,9 +443,14 @@ class BleGuiApp:
             widget.bind(f"<{mod}-0>", lambda _e: self._set_log_font_size(10))
             widget.bind(f"<{mod}-KP_0>", lambda _e: self._set_log_font_size(10))
 
+    @staticmethod
+    def _theme_button_label() -> str:
+        nxt = next_theme_mode()
+        return {"dark": "🌙 Dark", "black": "⬛ Black", "light": "☀ Light"}[nxt]
+
     def toggle_theme(self):
-        """Switch live between Light and Dark themes and remember the choice."""
-        new_mode = "light" if get_theme_mode() == "dark" else "dark"
+        """Cycle live between Dark, Pure Black, and Light themes and remember the choice."""
+        new_mode = next_theme_mode()
         old_palette = set_theme_mode(new_mode)
         user_settings.put("theme", new_mode)
         apply_brand_theme(self.root)
@@ -2588,7 +2592,7 @@ class BleGuiApp:
         btn_row = tk.Frame(body, bg=BRAND["surface"])
         btn_row.pack(fill=tk.X, pady=(4, 0))
 
-        btn_download = self._btn(btn_row, "Download & Install", lambda: None, BRAND["ok"])
+        btn_download = self._btn(btn_row, "Update from Git", lambda: None, BRAND["ok"])
         btn_download.config(state=tk.DISABLED)
         btn_download.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -2649,7 +2653,7 @@ class BleGuiApp:
                 except Exception as exc:
                     self.root.after(0, lambda e=exc: (
                         lbl_status.config(text=f"Download failed: {e}", fg=BRAND["err"]),
-                        btn_download.config(state=tk.NORMAL, text="Download & Install"),
+                        btn_download.config(state=tk.NORMAL, text="Update from Git"),
                     ))
 
             threading.Thread(target=_dl, name="update-download", daemon=True).start()
@@ -2673,14 +2677,22 @@ class BleGuiApp:
                     text=f"New version available: {info['tag']} ({info.get('asset_name') or 'Release page'})",
                     fg=BRAND["ok"],
                 )
-                btn_download.config(state=tk.NORMAL, command=lambda i=info: _start_online_update(i))
+                btn_download.config(
+                    state=tk.NORMAL,
+                    text=f"Update from Git ({info['tag']})",
+                    command=lambda i=info: _start_online_update(i),
+                )
             else:
                 lbl_status.config(
                     text=f"You are on the latest version (v{BRAND['version']} · latest release {info['tag']}).",
                     fg=BRAND["ok"],
                 )
                 if info.get("asset_url"):
-                    btn_download.config(state=tk.NORMAL, text="Reinstall", command=lambda i=info: _start_online_update(i))
+                    btn_download.config(
+                        state=tk.NORMAL,
+                        text="Update from Git",
+                        command=lambda i=info: _start_online_update(i),
+                    )
 
         def _fetch():
             try:
@@ -2757,7 +2769,7 @@ class BleGuiApp:
         btn_row = tk.Frame(body, bg=BRAND["surface"])
         btn_row.pack(fill=tk.X, pady=(4, 0))
 
-        btn_download = self._btn(btn_row, "Download & Install", lambda: None, BRAND["ok"])
+        btn_download = self._btn(btn_row, "Update from Git", lambda: None, BRAND["ok"])
         btn_download.config(state=tk.DISABLED)
         btn_download.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -2818,7 +2830,7 @@ class BleGuiApp:
                 except Exception as exc:
                     self.root.after(0, lambda e=exc: (
                         lbl_status.config(text=f"Download failed: {e}", fg=BRAND["err"]),
-                        btn_download.config(state=tk.NORMAL, text="Download & Install"),
+                        btn_download.config(state=tk.NORMAL, text="Update from Git"),
                     ))
 
             threading.Thread(target=_dl, name="update-download", daemon=True).start()
@@ -2842,14 +2854,22 @@ class BleGuiApp:
                     text=f"New version available: {info['tag']} ({info.get('asset_name') or 'Release page'})",
                     fg=BRAND["ok"],
                 )
-                btn_download.config(state=tk.NORMAL, command=lambda i=info: _start_online_update(i))
+                btn_download.config(
+                    state=tk.NORMAL,
+                    text=f"Update from Git ({info['tag']})",
+                    command=lambda i=info: _start_online_update(i),
+                )
             else:
                 lbl_status.config(
                     text=f"You are on the latest version (v{BRAND['version']} · latest release {info['tag']}).",
                     fg=BRAND["ok"],
                 )
                 if info.get("asset_url"):
-                    btn_download.config(state=tk.NORMAL, text="Reinstall", command=lambda i=info: _start_online_update(i))
+                    btn_download.config(
+                        state=tk.NORMAL,
+                        text="Update from Git",
+                        command=lambda i=info: _start_online_update(i),
+                    )
 
         def _fetch():
             try:

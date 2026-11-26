@@ -1,7 +1,19 @@
-# Succorfish BLE & Serial Monitor — Release Notes (v2.4.0)
+# Succorfish Debug Monitor — Release Notes (v2.4.0)
 
 **Release Date:** 2026-11-26  
 **Platforms:** Windows 10/11 (x64) · macOS (Apple Silicon `arm64` & Intel `x86_64`) · Linux
+
+---
+
+## Downloads — Installable vs Portable
+
+| Download | Platform | Type | Description |
+| :--- | :--- | :--- | :--- |
+| **`SuccorfishDebugMonitor-Windows-Installable-v2.4.0.exe`** | Windows 10/11 x64 | **Installable (Recommended)** | Standard Windows installer — Start Menu & Desktop shortcut, Installed Apps entry, uninstaller, and automatic in-place upgrades. |
+| **`SuccorfishDebugMonitor-Windows-Portable-v2.4.0.exe`** | Windows 10/11 x64 | **Portable** | Single standalone `.exe` — no installation needed, run directly from any folder or USB drive. |
+| **`SuccorfishDebugMonitor-macOS-v2.4.0.app.zip`** | macOS (Apple Silicon) | **Installable / Portable** | Unzip `SuccorfishDebugMonitor.app` — drag to `/Applications` to install, or run directly from any folder. |
+
+> **Built-in Software Updates:** Click **`↻ Update`** in the top bar (or accept the automatic update notification) to upgrade online from GitHub Releases or offline from a local `.exe` file.
 
 ---
 

@@ -15,10 +15,10 @@ import tkinter as tk
 
 
 def apply_os_titlebar_theme(win, dark: bool | None = None) -> None:
-    """Match the native Windows 10/11 title bar to Dark/Light mode (like VS Code). No-op on macOS/Linux."""
+    """Match the native Windows 10/11 title bar to Dark/Black vs Light mode (like VS Code). No-op on macOS/Linux."""
     if not sys.platform.startswith("win"):
         return
-    use_dark = (get_theme_mode() == "dark") if dark is None else bool(dark)
+    use_dark = (get_theme_mode() in ("dark", "black")) if dark is None else bool(dark)
     try:
         win.update_idletasks()
         hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
