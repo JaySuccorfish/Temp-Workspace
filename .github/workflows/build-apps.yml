@@ -1,4 +1,4 @@
-name: Build & Release Windows EXE, Setup Installer & macOS App
+name: Build & Release Succorfish Debug Monitor (Windows Installable/Portable & macOS)
 
 on:
   workflow_dispatch:
@@ -17,22 +17,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Build Windows OneDir + Standard Setup Installer (.exe)
+      - name: Build Windows Installable Setup (.exe)
         shell: pwsh
         run: |
           cd "BLE & Serial Monitoring"
           .\build_exe.ps1 -Mode OneDir -Version 2.4.0 -NoSmokeTest -Installer
-      - name: Build Windows Portable Single-File EXE
+      - name: Build Windows Portable Single-File (.exe)
         shell: pwsh
         run: |
           cd "BLE & Serial Monitoring"
           .\build_exe.ps1 -Mode OneFile -Version 2.4.0 -NoSmokeTest
       - uses: actions/upload-artifact@v4
         with:
-          name: ValtrackDebugMonitor-Windows
+          name: SuccorfishDebugMonitor-Windows
           path: |
-            BLE & Serial Monitoring/dist/ValtrackDebugMonitor.exe
-            BLE & Serial Monitoring/dist/SuccorfishBLEMonitor-Setup-v*.exe
+            BLE & Serial Monitoring/dist/SuccorfishDebugMonitor.exe
+            BLE & Serial Monitoring/dist/SuccorfishDebugMonitor-Windows-Installable-v*.exe
 
   build-macos:
     runs-on: macos-latest
@@ -44,11 +44,11 @@ jobs:
           chmod +x Start_Monitor_Mac.command build_mac.sh
           ./build_mac.sh --version 2.4.0
           cd dist
-          zip -r ValtrackDebugMonitor-macOS.app.zip ValtrackDebugMonitor.app
+          zip -r SuccorfishDebugMonitor-macOS.app.zip SuccorfishDebugMonitor.app
       - uses: actions/upload-artifact@v4
         with:
-          name: ValtrackDebugMonitor-macOS
-          path: "BLE & Serial Monitoring/dist/ValtrackDebugMonitor-macOS.app.zip"
+          name: SuccorfishDebugMonitor-macOS
+          path: "BLE & Serial Monitoring/dist/SuccorfishDebugMonitor-macOS.app.zip"
 
   publish-release:
     needs: [build-windows, build-macos]
@@ -63,8 +63,8 @@ jobs:
       - name: Rename release assets with version tag
         run: |
           TAG="${GITHUB_REF_NAME}"
-          mv release-assets/ValtrackDebugMonitor.exe "release-assets/ValtrackDebugMonitor-Windows-${TAG}.exe"
-          mv release-assets/ValtrackDebugMonitor-macOS.app.zip "release-assets/ValtrackDebugMonitor-macOS-${TAG}.app.zip"
+          mv release-assets/SuccorfishDebugMonitor.exe "release-assets/SuccorfishDebugMonitor-Windows-Portable-${TAG}.exe"
+          mv release-assets/SuccorfishDebugMonitor-macOS.app.zip "release-assets/SuccorfishDebugMonitor-macOS-${TAG}.app.zip"
           ls -lh release-assets
       - name: Create / Update GitHub Release
         env:
@@ -72,10 +72,14 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           if gh release view "$TAG" >/dev/null 2>&1; then
+            # Delete old differently-named assets if any before uploading clean set
+            for old in $(gh release view "$TAG" --json assets --jq '.assets[].name'); do
+              gh release delete-asset "$TAG" "$old" --yes || true
+            done
             gh release upload "$TAG" release-assets/* --clobber
-            gh release edit "$TAG" --notes-file "BLE & Serial Monitoring/RELEASE_NOTES.md"
+            gh release edit "$TAG" --title "Succorfish Debug Monitor ${TAG}" --notes-file "BLE & Serial Monitoring/RELEASE_NOTES.md"
           else
             gh release create "$TAG" release-assets/* \
-              --title "Succorfish BLE & Serial Monitor ${TAG}" \
+              --title "Succorfish Debug Monitor ${TAG}" \
               --notes-file "BLE & Serial Monitoring/RELEASE_NOTES.md"
           fi

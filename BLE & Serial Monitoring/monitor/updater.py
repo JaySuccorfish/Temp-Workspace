@@ -77,10 +77,10 @@ def check_latest_release(timeout: float = 8.0) -> dict | None:
 def _pick_platform_asset(assets: list[dict]) -> dict | None:
     """Pick the best downloadable asset for the current OS."""
     if sys.platform.startswith("win"):
-        # Prefer standard Setup installer (.exe), fall back to portable Windows .exe
+        # Prefer standard Installable/Setup installer (.exe), fall back to Portable Windows .exe
         for a in assets:
             name = (a.get("name") or "").lower()
-            if "setup" in name and name.endswith(".exe"):
+            if ("installable" in name or "setup" in name) and name.endswith(".exe"):
                 return a
         for a in assets:
             name = (a.get("name") or "").lower()
@@ -126,8 +126,8 @@ def apply_windows_exe_update(new_exe_path: str) -> str:
     base = os.path.basename(new_exe_path).lower()
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-    # Case 1: Standard Setup installer (Inno Setup) -- launch installer and exit cleanly
-    if "setup" in base or "install" in base:
+    # Case 1: Standard Installable / Setup installer (Inno Setup) -- launch installer and exit cleanly
+    if "installable" in base or "setup" in base or "install" in base:
         subprocess.Popen([new_exe_path, "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"])
         return "Launching installer to upgrade..."
 

@@ -63,7 +63,7 @@ $VenvDir   = Join-Path $ScriptDir '.build-venv'
 $VenvPy    = Join-Path $VenvDir 'Scripts\python.exe'
 $BuildDir  = Join-Path $ScriptDir '.build'
 $DistDir   = Join-Path $ScriptDir 'dist'
-$AppName   = 'ValtrackDebugMonitor'
+$AppName   = 'SuccorfishDebugMonitor'
 
 # Console output helpers: a step heading, a success line, a warning line.
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
@@ -321,9 +321,9 @@ VSVersionInfo(
   ffi=FixedFileInfo(filevers=($verTuple), prodvers=($verTuple)),
   kids=[
     StringFileInfo([StringTable('040904B0',
-      [StringStruct('FileDescription','Valtrack Debug Monitor'),
+      [StringStruct('FileDescription','Succorfish Debug Monitor'),
        StringStruct('FileVersion','$Version'),
-       StringStruct('ProductName','Valtrack Debug Monitor'),
+       StringStruct('ProductName','Succorfish Debug Monitor'),
        StringStruct('ProductVersion','$Version')])]),
     VarFileInfo([VarStruct('Translation',[1033,1200])])
   ]
@@ -427,7 +427,7 @@ if ($Installer) {
         Write-Warn $isccRes.Output
         throw "Inno Setup failed (exit $($isccRes.ExitCode))"
     }
-    $setupExe = Join-Path $DistDir "SuccorfishBLEMonitor-Setup-v$instVer.exe"
+    $setupExe = Join-Path $DistDir "SuccorfishDebugMonitor-Windows-Installable-v$instVer.exe"
     if (Test-Path $setupExe) {
         $setupMb = [math]::Round((Get-Item $setupExe).Length / 1MB, 2)
         Write-Ok "$setupExe  ($setupMb MB, standard Windows installer)"

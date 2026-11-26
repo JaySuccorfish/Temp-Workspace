@@ -15,7 +15,7 @@ cd "$SCRIPT_DIR"
 
 MODE="build"
 VERSION="2.3.0"
-APP_NAME="ValtrackDebugMonitor"
+APP_NAME="SuccorfishDebugMonitor"
 
 while [ $# -gt 0 ]; do
     case "$1" in
