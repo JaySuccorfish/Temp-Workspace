@@ -2515,13 +2515,50 @@ class BleGuiApp:
         threading.Thread(target=_worker, name="update-check", daemon=True).start()
 
     def _mark_update_available(self, info: dict):
+        """Highlight the top-bar Update button AND show a non-blocking VS Code-style update toast."""
         try:
             self.btn_update.config(
                 text=f"⬆ {info['tag']}",
                 bg=BRAND["ok"], fg="#ffffff",
             )
+            self._show_update_toast(info)
         except tk.TclError:
             pass
+
+    def _show_update_toast(self, info: dict):
+        """Show a sleek bottom-right notification banner when a newer release is available."""
+        if getattr(self, "_update_toast", None) is not None:
+            try:
+                self._update_toast.destroy()
+            except tk.TclError:
+                pass
+        toast = tk.Frame(
+            self.root, bg=BRAND["surface"], padx=10, pady=8,
+            highlightthickness=1, highlightbackground=BRAND["ok"],
+        )
+        self._update_toast = toast
+        tk.Label(
+            toast,
+            text=f"⬆ New update available: {info['tag']}  (current v{BRAND['version']})",
+            font=("Segoe UI", 9, "bold"), fg=BRAND["text"], bg=BRAND["surface"],
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        self._btn(
+            toast, "Update Now",
+            lambda: (self._dismiss_update_toast(), self._open_update_dialog()),
+            BRAND["ok"],
+        ).pack(side=tk.LEFT, padx=(0, 4))
+        self._btn(toast, "×", self._dismiss_update_toast, BRAND["surface_alt"]).pack(side=tk.LEFT)
+        toast.place(relx=1.0, rely=1.0, anchor="se", x=-16, y=-16)
+        toast.lift()
+
+    def _dismiss_update_toast(self):
+        toast = getattr(self, "_update_toast", None)
+        if toast is not None:
+            try:
+                toast.destroy()
+            except tk.TclError:
+                pass
+            self._update_toast = None
 
     def _open_update_dialog(self):
         """Show Software Update dialog: check online GitHub Release or install from a local .exe."""
