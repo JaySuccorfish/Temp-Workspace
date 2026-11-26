@@ -1,0 +1,31 @@
+# Runtime dependencies for Tools/debug_monitor.py
+#
+# Install with:
+#   py -3.14 -m venv .venv
+#   .venv\Scripts\python -m pip install -r requirements.txt
+#
+# These are BOTH the runtime deps and the build deps. There is deliberately no separate
+# requirements-dev.txt: PyInstaller is a pure build tool that never ships inside the exe, but
+# keeping one file means the venv used to RUN the script is identical to the venv used to BUILD
+# it, so a build can never disagree with a working local run.
+
+# BLE transport. On Windows, bleak pulls in the winrt-* packages automatically; PyInstaller's
+# hooks collect them. Do not pin winrt-* here -- their versions are dictated by bleak and the
+# Windows SDK, and pinning them is how Windows BLE builds break on the next OS update.
+bleak>=0.22.0
+
+# Serial terminal (Tera Term-style). Optional at runtime: if missing, the Serial panel
+# disables itself and the BLE tool is unaffected.
+pyserial>=3.5
+
+# AES-128-CBC for the encrypted command/response frames.
+pycryptodome>=3.20.0
+
+# --- build only -------------------------------------------------------------------------------
+# Supports Python 3.10-3.14+. Using >= allows any developer laptop with Python 3.10+ to build.
+pyinstaller>=6.10.0
+
+# --- optional, not in the exe -----------------------------------------------------------------------------------
+# Delphis picture encode / decode (latent_codec_worker.py, run in a child process from the source version):
+#   pip install numpy onnxruntime pillow
+# plus d128_encoder.onnx / d128_decoder.onnx, chosen once in the Picture transfer tab.
