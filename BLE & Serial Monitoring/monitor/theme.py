@@ -9,8 +9,26 @@ from brand_assets import BRAND_ICON_B64
 from brand_assets import BRAND_LOGO_B64
 from datetime import datetime, timezone
 from tkinter import ttk
+import ctypes
 import sys
 import tkinter as tk
+
+
+def apply_os_titlebar_theme(win, dark: bool | None = None) -> None:
+    """Match the native Windows 10/11 title bar to Dark/Light mode (like VS Code). No-op on macOS/Linux."""
+    if not sys.platform.startswith("win"):
+        return
+    use_dark = (get_theme_mode() == "dark") if dark is None else bool(dark)
+    try:
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+        val = ctypes.c_int(1 if use_dark else 0)
+        for attr in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (Win11 / Win10 1903+)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(hwnd), ctypes.c_int(attr), ctypes.byref(val), ctypes.sizeof(val)
+            )
+    except Exception:
+        pass
 
 
 _MAC_BUTTON_SHIM_INSTALLED = False
@@ -250,6 +268,7 @@ def apply_brand_theme(root):
         style.configure(name, background=b["surface"], borderwidth=0)
     style.configure("TLabelframe.Label", background=b["surface"], foreground=b["accent"])
     style.configure("BrandHdr.TFrame", background=THEME_PALETTES["dark"]["bg"])
+    style.configure("CompactHdr.TFrame", background=b["surface"])
     style.configure("TLabel", background=b["surface"], foreground=b["text"], font=b["font_ui"])
     style.configure("TSeparator", background=b["border"])
 
@@ -334,7 +353,7 @@ def retheme_widget_tree(root, old_palette: dict, new_palette: dict) -> None:
     )
 
     def _walk(widget):
-        if isinstance(widget, BrandHeader):
+        if isinstance(widget, BrandHeader) and not getattr(widget, "_compact", False):
             return
         updates = {}
         for opt in color_opts:
@@ -362,15 +381,17 @@ class BrandHeader(ttk.Frame):
     """
 
     def __init__(self, parent, subtitle=None, show_clock=True, on_toggle_theme=None, compact=False):
-        super().__init__(parent, style="BrandHdr.TFrame")
+        super().__init__(parent, style="CompactHdr.TFrame" if compact else "BrandHdr.TFrame")
+        self._compact = bool(compact)
         logo, _ = (None, None) if compact else brand_images()
-        hdr = THEME_PALETTES["dark"]
+        hdr = BRAND if compact else THEME_PALETTES["dark"]
+        bar_bg = hdr["surface"] if compact else hdr["bg"]
 
         self.columnconfigure(1, weight=1)
 
         if compact:
             title_txt = f"{BRAND['company']}  ·  {subtitle or BRAND['product']}  v{BRAND['version']}"
-            tk.Label(self, text=title_txt, bg=hdr["bg"], fg=hdr["accent"],
+            tk.Label(self, text=title_txt, bg=bar_bg, fg=hdr["accent"],
                      font=(FONT_UI_FAMILY, 9, "bold")).grid(
                 row=0, column=0, sticky="w", padx=(10, 8), pady=3)
             self._ver = None
@@ -437,13 +458,13 @@ class BrandHeader(ttk.Frame):
         else:
             self.btn_theme = None
 
-        self.status_lbl = tk.Label(self, text="[DISCONNECTED]", bg=hdr["bg"],
+        self.status_lbl = tk.Label(self, text="[DISCONNECTED]", bg=bar_bg,
                                    fg=hdr["text_muted"], font=(FONT_MONO_FAMILY, 8, "bold"))
         self.status_lbl.grid(row=0, column=4, rowspan=rowspan, sticky="e", padx=(0, 10))
 
         # thin accent rule under the bar
         rule_row = 1 if compact else 2
-        tk.Frame(self, bg=hdr["accent"], height=1 if compact else 2).grid(
+        tk.Frame(self, bg=hdr["border"] if compact else hdr["accent"], height=1 if compact else 2).grid(
             row=rule_row, column=0, columnspan=5, sticky="ew")
 
     def refresh_theme_button(self):
