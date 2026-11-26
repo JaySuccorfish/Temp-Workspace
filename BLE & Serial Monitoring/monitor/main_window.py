@@ -2705,6 +2705,175 @@ class BleGuiApp:
         self.root.destroy()
         sys.exit(0)
 
+    # ---------------------------------------------------------------------------------------
+    # Software update (GitHub Releases + offline local .exe upgrade)
+    # ---------------------------------------------------------------------------------------
+    def _check_update_background(self):
+        """Non-blocking startup check for a newer GitHub Release."""
+        def _worker():
+            try:
+                info = updater.check_latest_release(timeout=6.0)
+            except Exception:
+                return
+            if info and info.get("is_newer"):
+                self._latest_release_info = info
+                self.root.after(0, lambda i=info: self._mark_update_available(i))
+        threading.Thread(target=_worker, name="update-check", daemon=True).start()
+
+    def _mark_update_available(self, info: dict):
+        try:
+            self.btn_update.config(
+                text=f"⬆ {info['tag']}",
+                bg=BRAND["ok"], fg="#ffffff",
+            )
+        except tk.TclError:
+            pass
+
+    def _open_update_dialog(self):
+        """Show Software Update dialog: check online GitHub Release or install from a local .exe."""
+        dlg = tk.Toplevel(self.root)
+        dlg.title(f"{BRAND['company']} — Software Update")
+        dlg.geometry("460x260")
+        dlg.resizable(False, False)
+        dlg.configure(bg=BRAND["bg"])
+        dlg.transient(self.root)
+        apply_window_icon(dlg)
+        apply_os_titlebar_theme(dlg)
+
+        body = tk.Frame(dlg, bg=BRAND["surface"], padx=14, pady=12)
+        body.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        tk.Label(body, text=f"Installed version: v{BRAND['version']}",
+                 font=("Segoe UI", 10, "bold"), fg=BRAND["text"], bg=BRAND["surface"]).pack(anchor="w")
+
+        lbl_status = tk.Label(body, text="Checking GitHub Releases for updates...",
+                              font=("Segoe UI", 9), fg=BRAND["text_dim"], bg=BRAND["surface"],
+                              wraplength=410, justify=tk.LEFT)
+        lbl_status.pack(anchor="w", pady=(6, 8))
+
+        pbar = ttk.Progressbar(body, mode="determinate", maximum=100)
+        pbar.pack(fill=tk.X, pady=(0, 10))
+
+        btn_row = tk.Frame(body, bg=BRAND["surface"])
+        btn_row.pack(fill=tk.X, pady=(4, 0))
+
+        btn_download = self._btn(btn_row, "Download & Install", lambda: None, BRAND["ok"])
+        btn_download.config(state=tk.DISABLED)
+        btn_download.pack(side=tk.LEFT, padx=(0, 6))
+
+        def _install_local_exe():
+            path = filedialog.askopenfilename(
+                parent=dlg,
+                title="Select new Succorfish Monitor .exe / Setup installer",
+                filetypes=[("Windows Executables", "*.exe"), ("All files", "*.*")],
+            )
+            if not path:
+                return
+            try:
+                msg = updater.apply_windows_exe_update(path)
+                lbl_status.config(text=msg, fg=BRAND["ok"])
+                dlg.update_idletasks()
+                self.root.after(400, self._quit_for_update)
+            except Exception as exc:
+                messagebox.showerror("Update failed", str(exc), parent=dlg)
+
+        if sys.platform.startswith("win"):
+            self._btn(btn_row, "Update from .exe...", _install_local_exe, BRAND["accent_dark"]).pack(
+                side=tk.LEFT, padx=(0, 6)
+            )
+
+        self._btn(btn_row, "Close", dlg.destroy, BRAND["surface_alt"]).pack(side=tk.RIGHT)
+
+        def _start_online_update(info: dict):
+            asset_url = info.get("asset_url")
+            asset_name = info.get("asset_name")
+            if not asset_url or not asset_name:
+                updater.open_macos_update(url=info.get("html_url"))
+                return
+            btn_download.config(state=tk.DISABLED, text="Downloading...")
+            lbl_status.config(text=f"Downloading {asset_name}...", fg=BRAND["info"])
+
+            def _dl():
+                try:
+                    def _prog(done, total):
+                        pct = int(done * 100 / total) if total else 0
+                        self.root.after(0, lambda p=pct, d=done, t=total: (
+                            pbar.configure(value=p),
+                            lbl_status.config(
+                                text=f"Downloading {asset_name}... {d / 1048576:.1f} MB"
+                                     + (f" / {t / 1048576:.1f} MB ({p}%)" if t else "")
+                            ),
+                        ))
+                    local_path = updater.download_asset(asset_url, asset_name, progress_cb=_prog)
+                    if sys.platform.startswith("win"):
+                        msg = updater.apply_windows_exe_update(local_path)
+                        self.root.after(0, lambda m=msg: lbl_status.config(text=m, fg=BRAND["ok"]))
+                        self.root.after(500, self._quit_for_update)
+                    else:
+                        updater.open_macos_update(zip_path=local_path, url=info.get("html_url"))
+                        self.root.after(0, lambda: lbl_status.config(
+                            text=f"Downloaded {asset_name} and revealed in Finder. Unzip & replace the app.",
+                            fg=BRAND["ok"],
+                        ))
+                except Exception as exc:
+                    self.root.after(0, lambda e=exc: (
+                        lbl_status.config(text=f"Download failed: {e}", fg=BRAND["err"]),
+                        btn_download.config(state=tk.NORMAL, text="Download & Install"),
+                    ))
+
+            threading.Thread(target=_dl, name="update-download", daemon=True).start()
+
+        def _populate(info, err=None):
+            if not dlg.winfo_exists():
+                return
+            if err is not None:
+                lbl_status.config(
+                    text=f"Could not reach GitHub Releases ({err}).\nYou can still update offline using 'Update from .exe...'.",
+                    fg=BRAND["warn"],
+                )
+                return
+            if not info:
+                lbl_status.config(text="No releases published yet.", fg=BRAND["text_dim"])
+                return
+            self._latest_release_info = info
+            if info["is_newer"]:
+                self._mark_update_available(info)
+                lbl_status.config(
+                    text=f"New version available: {info['tag']} ({info.get('asset_name') or 'Release page'})",
+                    fg=BRAND["ok"],
+                )
+                btn_download.config(state=tk.NORMAL, command=lambda i=info: _start_online_update(i))
+            else:
+                lbl_status.config(
+                    text=f"You are on the latest version (v{BRAND['version']} · latest release {info['tag']}).",
+                    fg=BRAND["ok"],
+                )
+                if info.get("asset_url"):
+                    btn_download.config(state=tk.NORMAL, text="Reinstall", command=lambda i=info: _start_online_update(i))
+
+        def _fetch():
+            try:
+                info = updater.check_latest_release(timeout=8.0)
+                self.root.after(0, lambda i=info: _populate(i, None))
+            except Exception as exc:
+                self.root.after(0, lambda e=exc: _populate(None, e))
+
+        threading.Thread(target=_fetch, name="update-dialog-check", daemon=True).start()
+
+    def _quit_for_update(self):
+        """Disconnect active links cleanly and exit so the installer / updater can replace the exe."""
+        try:
+            self.serial.close()
+        except Exception:
+            pass
+        try:
+            fut = run_async(engine.disconnect_all())
+            fut.result(timeout=2)
+        except Exception:
+            pass
+        self.root.destroy()
+        sys.exit(0)
+
     def _save_logs(self):
         """Save the currently selected tab's log with a tab-specific timestamped filename."""
         widget, tab_key, default_name, header = self._build_tab_log_meta()
